@@ -315,11 +315,21 @@ static NSString *join_addresses(void)
     if (lan || vpn) return [NSString stringWithFormat:@"This Mac: %@", lan ?: vpn];
     return nil;
 }
-static NSArray<NSDictionary *> *mode_choices(void)
+static NSString *expansion_dir(NSString *data) { return [data stringByAppendingPathComponent:@"expansion"]; }
+static BOOL have_expansion(NSString *data)       /* install.sh --expansion: Legends of Aranna's data */
+{
+    return [NSFileManager.defaultManager fileExistsAtPath:[expansion_dir(data) stringByAppendingPathComponent:@"Resources/Expansion.dsres"]];
+}
+static NSArray<NSDictionary *> *mode_choices(NSString *data)
 {
     NSString *ip = join_addresses();
-    return @[@{@"value": @"single", @"label": @"Single Player", @"note": @"The Kingdom of Ehb campaign"},
-             @{@"value": @"multi", @"label": @"Multiplayer", @"note": ip ?: @"LAN and internet games, with Mac and Windows players"}];
+    NSMutableArray *a = [@[@{@"value": @"single", @"label": @"Single Player", @"note": @"The Kingdom of Ehb campaign"},
+                           @{@"value": @"multi", @"label": @"Multiplayer", @"note": ip ?: @"LAN and internet games, with Mac and Windows players"}] mutableCopy];
+    if (have_expansion(data)) {
+        [a addObject:@{@"value": @"loa", @"label": @"Legends of Aranna", @"note": @"The expansion's campaign, with its own saves"}];
+        [a addObject:@{@"value": @"loa-multi", @"label": @"Aranna Multiplayer", @"note": ip ?: @"Legends of Aranna's multiplayer maps"}];
+    }
+    return a;
 }
 static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dflt)
 {
@@ -327,9 +337,10 @@ static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dfl
     return dflt;
 }
 /* the chosen settings as environment for the runtime (read later at start-up) */
-static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode)
+static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode, NSString *data)
 {
-    if ([mode isEqualToString:@"multi"]) {   /* the game's own switch for its multiplayer screens */
+    if ([mode hasPrefix:@"loa"] && have_expansion(data)) setenv("DS_EXPANSION", expansion_dir(data).fileSystemRepresentation, 1);
+    if ([mode hasSuffix:@"multi"]) {   /* the game's own switch for its multiplayer screens */
         const char *old = getenv("DS_ARGS"); NSString *args = old && *old ? [NSString stringWithFormat:@"%s zonematch=true", old] : @"zonematch=true";
         if (!(old && strstr(old, "zonematch"))) setenv("DS_ARGS", args.UTF8String, 1);
     }
@@ -349,10 +360,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
     dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], 2);
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
-    mode.title = @"Game"; mode.choices = mode_choices(); mode.index = index_of(mode.choices, saved[@"mode"], 0);
+    mode.title = @"Game"; mode.choices = mode_choices(data); mode.index = index_of(mode.choices, saved[@"mode"], 0);
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
-        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"]);
+        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data);
         return 1;
     }
 
@@ -391,6 +402,6 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     if (!result) return 0;
     NSString *rv = res.choices[res.index][@"value"], *dv = dist.choices[dist.index][@"value"], *fv = fps.choices[fps.index][@"value"], *mv = mode.choices[mode.index][@"value"];
     [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv, mv);
+    apply(rv, dv, fv, mv, data);
     return 1;
 }

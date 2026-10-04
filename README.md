@@ -22,6 +22,7 @@ troubleshooting.
 - **A launch window** in the game's style for single player or multiplayer, resolution, **view distance** and frame
   rate. Your choices are remembered, so normally you just press Play.
 - **Multiplayer** on LAN and over the internet, compatible with DirectPlay on Windows, plus the Yesterhaven map.
+- **Legends of Aranna**, the expansion, from your own copy's data (`./install.sh --expansion <folder>`).
 - **Built-in view distance** from the original up to 300%, without mods (150% matches the community SeeFar mod).
 - **The game's own sound system** (Miles), recompiled as well, playing through Core Audio.
 - Mouse, trackpad and keyboard, saving and loading, the full single-player campaign.
@@ -45,7 +46,9 @@ and on complete routines. Details: [recomp/README.md](recomp/README.md).
 - Single-player campaign: playable.
 - Multiplayer: LAN and internet games, including Yesterhaven, with Mac and Windows players (Windows compatibility
   not yet tested): [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
-- Only the GOG release 1.11.1 is supported; *Legends of Aranna* is not supported yet.
+- *Legends of Aranna*: its campaign runs on the recompiled engine from your own copy's data, with the engine functions
+  it added written anew (not everything yet): [docs/LEGENDS-OF-ARANNA.md](docs/LEGENDS-OF-ARANNA.md).
+- Only the GOG release 1.11.1 of Dungeon Siege is supported as the base game.
 
 ## Legal
 
