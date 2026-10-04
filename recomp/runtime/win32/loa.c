@@ -1188,6 +1188,82 @@ static void set_items_update(Ctx *c, uint32_t wielder)
     set_alteration_sums(c, wielder, group, file, n);
     modifiers_dirty(c, wielder);
 }
+/* ---- backpacks: an item with its own inventory (DSX_base_backpack, [inventory] is_backpack), opened with a right
+ * click into the expansion's dsx_backpack_ui. As for a spellbook, the engine makes the item's inventory grid
+ * (0x5df7a0, laid out after the interface's gridbox_8x4) and the inventory manager fills it (0x5003f8); items are then
+ * dragged in and out like any inventory grid. ---- */
+static uint32_t open_backpack, saved_container[2]; static int spell_was_visible;
+#define INV_MANAGER rt_r32(G_MEM, 0x7a0944u)      /* UIInventoryManager: +8 / +0xc the Goids of an opened container's opener and
+                                                   * container, by which its grid finds what it shows */
+static int iface_visible(Ctx *c, const char *name)
+{
+    uint32_t n = gpstr(c, name); return UISHELL && (ext_thiscall(c, FX("?IsInterfaceVisible@UIShell@@QAE_NABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n) & 0xff);
+}
+static void iface_show(Ctx *c, const char *name, int show)
+{
+    uint32_t n = gpstr(c, name);
+    ext_thiscall(c, show ? FX("?ShowInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z")
+                         : FX("?HideInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n);
+}
+static uint32_t backpack_grid(Ctx *c, uint32_t bp)
+{
+    uint32_t inv = go_comp(c, bp, "?GetInventory@Go@@QAEPAVGoInventory@@XZ"); if (!inv) return 0;
+    if (!rt_r32(G_MEM, inv + 0x94)) {
+        uint32_t a[2] = {bp, 0}, g = w32_callback(c, 0x5df7a0u, 2, a); rt_w32(G_MEM, inv + 0x94, g);
+        /* as the engine does for a party member's new grid (0x56f3e6): the inventory's pending item placements
+         * (+0x24, 0x28-byte records with a rectangle first) move into it, offset by the grid's origin */
+        uint32_t b = rt_r32(G_MEM, inv + 0x28), e = rt_r32(G_MEM, inv + 0x2c); int n = 0;
+        for (uint32_t r = b; g && b && r + 0x28 <= e; r += 0x28, n++) {
+            uint32_t ox = rt_r32(G_MEM, g + 0x60), oy = rt_r32(G_MEM, g + 0x64);
+            rt_w32(G_MEM, r, rt_r32(G_MEM, r) + ox); rt_w32(G_MEM, r + 8, rt_r32(G_MEM, r + 8) + ox);
+            rt_w32(G_MEM, r + 4, rt_r32(G_MEM, r + 4) + oy); rt_w32(G_MEM, r + 0xc, rt_r32(G_MEM, r + 0xc) + oy);
+            uint32_t rec[10]; for (int k = 0; k < 10; k++) rec[k] = rt_r32(G_MEM, r + 4 * (uint32_t)k);
+            ext_thiscall(c, 0x705045u, g, 10, rec);
+        }
+        if (g && b) { uint32_t er[2] = {b, e}; ext_thiscall(c, 0x572999u, inv + 0x24, 2, er); }   /* the list is emptied */
+        /* items without a placement: put where there is room, as an item entering a party member's inventory is */
+        uint32_t it[64]; int ni = g ? item_list_at(c, inv, it, 64, "il_all") : 0, placed = 0;
+        for (int i = 0; !n && i < ni; i++) {
+            uint32_t esp = c->esp, name = scratch(c, 16); ext_thiscall(c, GPSTR_CTOR, name, 0, 0);
+            uint32_t na[2] = {name, it[i]}; w32_callback(c, 0x56f625u, 2, na);
+            uint32_t pa[4] = {rt_r32(G_MEM, name) ? rt_r32(G_MEM, name) : 0x721414u, 1, GO_GOID(it[i]), rt_r32(G_MEM, 0x72346cu)};
+            placed += (int)(ext_thiscall(c, 0x705080u, g, 4, pa) & 0xff);
+            ext_thiscall(c, 0x48899au, name, 0, 0); scratch_end(c, esp);
+        }
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: backpack grid %08x made: %d placements, %d of %d items placed\n", g, n, placed, ni);
+    }
+    return rt_r32(G_MEM, inv + 0x94);
+}
+static void backpack_close(Ctx *c)
+{
+    uint32_t bp = open_backpack ? open_backpack : 0; open_backpack = 0;
+    if (bp) { uint32_t g = backpack_grid(c, bp), off = 0; if (g) ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, g) + 0x48), g, 1, &off); }
+    uint32_t n = gpstr(c, "dsx_backpack_ui");
+    ext_thiscall(c, FX("?MarkInterfaceForDeactivation@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n);
+    if (bp && INV_MANAGER) { rt_w32(G_MEM, INV_MANAGER + 8, saved_container[0]); rt_w32(G_MEM, INV_MANAGER + 0xc, saved_container[1]); }
+    if (spell_was_visible) iface_show(c, "spell", 1);                     /* the spellbook panel it stood in for */
+    spell_was_visible = 0;
+}
+static void backpack_open(Ctx *c, uint32_t bp)
+{
+    if (open_backpack && open_backpack != bp) backpack_close(c);
+    if (!open_backpack) { spell_was_visible = iface_visible(c, "spell"); if (spell_was_visible) iface_show(c, "spell", 0); }   /* same place */
+    uint32_t a[2] = {gpstr(c, "ui:interfaces:backend:dsx_backpack_ui"), 1};
+    ext_thiscall(c, FX("?ActivateInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), UISHELL, 2, a);
+    uint32_t g = backpack_grid(c, bp); if (!g) { fprintf(stderr, "loa: backpack %08x has no grid\n", bp); return; }
+    uint32_t on = 1; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, g) + 0x48), g, 1, &on);
+    uint32_t mgr = INV_MANAGER, holder = ext_thiscall(c, FX("?GetParent@Go@@QBEPAV1@XZ"), bp, 0, 0);
+    if (mgr && !open_backpack) { saved_container[0] = rt_r32(G_MEM, mgr + 8); saved_container[1] = rt_r32(G_MEM, mgr + 0xc); }
+    if (mgr && holder) { rt_w32(G_MEM, mgr + 8, GO_GOID(holder)); rt_w32(G_MEM, mgr + 0xc, GO_GOID(bp)); }
+    ext_thiscall(c, 0x5003f8u, mgr, 1, &g);                                 /* fill it */
+    open_backpack = bp;
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: backpack %08x open (grid %08x)\n", bp, g);
+}
+static int is_backpack(Ctx *c, uint32_t go)       /* an item with its own inventory that is not a spellbook */
+{
+    return go && go_comp(c, go, "?GetInventory@Go@@QAEPAVGoInventory@@XZ") && !(ext_thiscall(c, FX("?IsSpellBook@Go@@QBE_NXZ"), go, 0, 0) & 0xff) &&
+           !(ext_thiscall(c, FX("?HasActor@Go@@QBE_NXZ"), go, 0, 0) & 0xff);
+}
 static int override_impl(Ctx *c, uint32_t addr);
 /* an override either performs the whole call or returns 0 to let the original run; calls made while deciding (into the
  * game) clobber the registers the original expects at its entry, so they are put back */
@@ -1223,6 +1299,11 @@ static int override_impl(Ctx *c, uint32_t addr)
         else if (!strcmp(m, "exit_world_map")) world_map_close(c);
         else if (!strcmp(m, "unsummon_creatures")) end_party_spells(c, 0);
         else if (!strcmp(m, "auto_sell_activate")) auto_sell(c);
+        else if (!strcmp(m, "backpack_close")) backpack_close(c);
+        else if (!strcmp(m, "arrange_backpack_inventory")) {       /* as arrange_inventory does for a party member's grid */
+            uint32_t g = open_backpack ? backpack_grid(c, open_backpack) : 0;
+            if (g) { ext_thiscall(c, 0x7045a5u, g, 0, 0); ext_thiscall(c, 0x5003f8u, INV_MANAGER, 1, &g); }
+        }
         else if (!strcmp(m, "auto_sell_list_options")) sell_list(c, 1);
         else if (!strcmp(m, "auto_sell_hide_options")) sell_list(c, 0);
         else if (!strcmp(m, "eg_close")) {            /* closing the end-of-game dialog: ours, then the base game's own handling */
@@ -1355,6 +1436,12 @@ static int override_impl(Ctx *c, uint32_t addr)
             if (!(mind && (ext_thiscall(c, FX("?IsFriend@GoMind@@QBE_NPBVGo@@@Z"), mind, 1, &attacker) & 0xff))) special_defense(c, victim, attacker);
         }
         inside = 0; c->eax = r; c->esp += 4 + 28; return 1;
+    }
+    case 0x4ff967: {                                  /* an inventory item is used (right click): backpacks open */
+        uint32_t item = goid_go(c, rt_r32(G_MEM, c->ecx + 0x14));
+        if (!is_backpack(c, item)) return 0;
+        if (open_backpack == item) backpack_close(c); else backpack_open(c, item);
+        c->esp += 4 + 4; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
@@ -1634,6 +1721,20 @@ static void key_untransform(Ctx *c)
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
     uint32_t m[16];
     if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
+    if (getenv("DS_LOA_BACKPACKTEST") && party_members(c, m, 16)) {   /* development: Y opens/closes the first backpack carried */
+        uint32_t inv = go_comp(c, m[0], "?GetInventory@Go@@QAEPAVGoInventory@@XZ"), it[64]; int n = inv ? item_list_at(c, inv, it, 64, "il_all") : 0;
+
+        for (int i = 0; i < n; i++) if (is_backpack(c, it[i])) { if (open_backpack == it[i]) backpack_close(c); else backpack_open(c, it[i]); RET(1, 0); }
+        uint32_t esp = c->esp, a[1] = {sstr(c, "DSX_backpack_potions")};        /* none: one is given */
+        uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBD@Z"), 1, a);
+        uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+        uint32_t bp = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+        scratch_end(c, esp);
+        static uint32_t il_main, ao; if (!ao) { fubi_enum(c, "eInventoryLocation", "il_main", &il_main); fubi_enum(c, "eActionOrigin", "ao_command", &ao); }
+        uint32_t add[4] = {goid_go(c, bp), il_main, ao, 1};
+        if (inv && add[0]) ext_thiscall(c, FX("?RSAdd@GoInventory@@QAEPAUCookie__@FuBi@@PAVGo@@W4eInventoryLocation@@W4eActionOrigin@@_N@Z"), inv, 4, add);
+        fprintf(stderr, "loa: test backpack %08x given\n", bp); RET(1, 0);
+    }
     if (getenv("DS_LOA_SETTEST") && party_members(c, m, 16)) {     /* development: Y gives the first member these items, equipped */
         static uint32_t es_none, ao; if (!ao) { fubi_enum(c, "eEquipSlot", "es_any", &es_none); fubi_enum(c, "eActionOrigin", "ao_command", &ao); }
         char list[512]; snprintf(list, sizeof list, "%s", getenv("DS_LOA_SETTEST"));

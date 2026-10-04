@@ -58,6 +58,7 @@ OVERRIDES = {
     0x005a8af3: 'Rules::GetDamageRange(Goid, Goid, float&, float&, bool)',
     0x005c5515: 'GoAttack::GetAttackRange()',
     0x005a97b8: 'Rules: damage a Go (victim, attacker, weapon, amount, ...)',
+    0x004ff967: 'UIInventoryManager: an inventory item is used (right click)',
 }
 
 class Unsupported(Exception): pass
