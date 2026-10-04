@@ -58,6 +58,7 @@ Open **Dungeon Siege Native** from `~/Applications` (or Spotlight). The launch w
 
 | Setting | Choices |
 |---|---|
+| **Game** | Single Player, or Multiplayer: the game opens on its multiplayer screens (see [MULTIPLAYER.md](MULTIPLAYER.md)); the note shows this Mac's address for other players. |
 | **Resolution** | Your display's size (recommended), its full Retina size, or a standard size that fits. The game's front-end menus are always 800×600 by design and are shown with bars at the sides; the game world uses the chosen resolution. |
 | **View Distance** | Original, Far (125%), Farther (150%, about what the SeeFar mod gives), Very Far (200%), Horizon (250%), Maximum (300%). Higher settings draw much more of the world; Horizon and Maximum can lower the frame rate in the largest outdoor areas. |
 | **Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120, 60, 30, or Unlimited (no cap, no vertical sync). |
@@ -87,8 +88,6 @@ uses the built-in view distance instead (the mod's file is set aside for that se
 
 ## Not supported yet
 
-- **Multiplayer.** The game's multiplayer needs Microsoft DirectPlay 8, which the app does not provide yet; the plan,
-  including playing with Windows players, is in [MULTIPLAYER-PLAN.md](MULTIPLAYER-PLAN.md).
 - *Legends of Aranna* (`DSLOA.exe`), the Steam and disc versions.
 
 ## For developers

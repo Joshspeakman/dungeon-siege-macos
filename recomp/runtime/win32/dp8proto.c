@@ -187,6 +187,24 @@ static void handle_acks(dp8_conn *c, uint8_t nrcv, uint64_t sack)
         }
     }
 }
+/* [MC-DPL8R] 2.2.3: 1-32 two-byte headers {bSize, bCommand} (the last with END_COALESCE, padded to 4 bytes), then the
+ * payloads, each but the last padded to 4 bytes; sizes are 11 bits (BIG_1..3 in bCommand). Returns the payload count. */
+int dp8_dec_coalesced(const uint8_t *p, size_t len, void (*fn)(void *, uint8_t user, const uint8_t *, size_t), void *ctx)
+{
+    size_t nh = 0; while (nh < 32 && 2 * nh + 2 <= len) { nh++; if (p[2 * nh - 1] & 0x01) break; }
+    size_t off = 2 * nh; if (nh & 1) off += 2;
+    int n = 0;
+    for (size_t i = 0; i < nh; i++) {
+        uint8_t bsize = p[2 * i], bcmd = p[2 * i + 1];
+        size_t sz = bsize | ((size_t)(bcmd & 0x38) << 5);
+        if (off + sz > len) break;
+        fn(ctx, bcmd & (CMD_USER_1 | CMD_USER_2), p + off, sz); n++;
+        off += sz; if (i + 1 < nh) off = (off + 3) & ~(size_t)3;
+    }
+    return n;
+}
+static void deliver(dp8_conn *c, uint8_t user, const uint8_t *data, size_t len);
+static void coalesced_one(void *c, uint8_t user, const uint8_t *data, size_t len) { deliver(c, user, data, len); }
 static void deliver(dp8_conn *c, uint8_t user, const uint8_t *data, size_t len)
 {
     Pend *m = malloc(sizeof *m + len); m->next = 0; m->c = c; m->user = user; m->len = len; memcpy(m->data, data, len);
@@ -201,20 +219,9 @@ static void flush_pending(dp8_ep *ep)        /* called without the lock */
 static void consume(dp8_conn *c, uint8_t cmd, uint8_t ctl, const uint8_t *p, size_t len)
 {
     if (ctl & CTL_END_STREAM) { c->end_recv = 1; return; }
-    if ((ctl & CTL_KEEPALIVE) && c->remote_version >= 0x00010005u) return;            /* KeepAlive: session id, not data */
+    if (ctl & CTL_KEEPALIVE) return;                     /* KeepAlive: no data (1.5 and later carry the session id) */
     uint8_t user = cmd & (CMD_USER_1 | CMD_USER_2);
-    if (ctl & CTL_COALESCE) {                                                            /* [MC-DPL8R] 2.2.3 */
-        size_t nh = 0; while (nh < 32 && 2 * nh + 2 <= len) { nh++; if (p[2 * nh - 1] & 0x01) break; }
-        size_t off = 2 * nh; if (nh & 1) off += 2;
-        for (size_t i = 0; i < nh; i++) {
-            uint8_t bsize = p[2 * i], bcmd = p[2 * i + 1];
-            size_t sz = bsize | ((size_t)((bcmd >> 3) & 7) << 8);
-            if (off + sz > len) break;
-            deliver(c, bcmd & (CMD_USER_1 | CMD_USER_2), p + off, sz);
-            off += sz; if (i + 1 < nh) off = (off + 3) & ~(size_t)3;
-        }
-        return;
-    }
+    if (ctl & CTL_COALESCE) { dp8_dec_coalesced(p, len, coalesced_one, c); return; }
     if ((cmd & CMD_NEW_MSG) && (cmd & CMD_END_MSG)) { c->inpart = 0; deliver(c, user, p, len); return; }
     if (cmd & CMD_NEW_MSG) { c->inpart = 1; c->partlen = 0; c->partuser = user; }
     if (!c->inpart) return;

@@ -180,7 +180,7 @@ static void a_BuildFromDirectPlay4Address(Ctx *c) { RET(DPNERR_UNSUPPORTED, 3); 
 /* ================================================================ sessions ([MC-DPL8CS], client/server mode) */
 enum {
     MSG_CONNECT_INFO = 0xC1, MSG_SEND_CONNECT_INFO = 0xC2, MSG_ACK_CONNECT_INFO = 0xC3, MSG_CONNECT_FAILED = 0xC5,
-    MSG_DESTROY_PLAYER = 0xD1, MSG_TERMINATE_SESSION = 0xDF, MSG_REQ_PROCESS_COMPLETION = 0xE0, MSG_PROCESS_COMPLETION = 0xE1,
+    MSG_DESTROY_PLAYER = 0xD1, MSG_REQ_UPDATE_INFO = 0xD6, MSG_UPDATE_INFO = 0xDB, MSG_TERMINATE_SESSION = 0xDF, MSG_REQ_PROCESS_COMPLETION = 0xE0, MSG_PROCESS_COMPLETION = 0xE1,
     NT_LOCAL = 0x1, NT_HOST = 0x2, NT_CLIENT = 0x200, NT_SERVER = 0x400,
     SESS_CLIENT_SERVER = 0x1, SESS_REQUIREPASSWORD = 0x80,
     DNET_VERSION = 2,                                   /* DirectX 8.1, like the game's own SDK */
@@ -225,6 +225,12 @@ static void bput(Buf *b, const void *d, size_t n) { if (b->n + n > b->cap) { b->
 static void bput32(Buf *b, uint32_t v) { bput(b, &v, 4); }
 static void bset32(Buf *b, size_t at, uint32_t v) { memcpy(b->p + at, &v, 4); }
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+static void hexlog(const char *what, const uint8_t *p, uint32_t n)
+{
+    if (!getenv("W32_DPLOG") || atoi(getenv("W32_DPLOG")) < 2) return;
+    char hex[3 * 128 + 1] = ""; uint32_t k = 0; for (; k < n && k < 128; k++) sprintf(hex + 3 * k, "%02x ", p[k]);
+    LOG("%s (%u bytes): %s\n", what, n, hex);
+}
 /* a field at "offset from the end of dwPacketType" (msg points at dwPacketType) */
 static int field(const uint8_t *msg, size_t len, uint32_t off, uint32_t size, Blob *out)
 {
@@ -385,6 +391,22 @@ static void send_connect_failed(dp8_conn *c, uint32_t hr, const Blob *reply)
     if (reply) put_blob_field(&b, 8, 12, reply);
     send_core(c, &b);
 }
+/* DN_UPDATE_INFO ([MC-DPL8CS] 2.2.5.2): a player's new name/data, server -> client */
+static void send_update_info(Sess *s, dp8_conn *c, uint32_t context, uint32_t dpnid, uint32_t requesting, const Blob *name, const Blob *data)
+{
+    Buf b = {0}; bput32(&b, MSG_UPDATE_INFO); bput32(&b, context); bput32(&b, dpnid); bput32(&b, s->ntver); bput32(&b, 0);
+    bput32(&b, (name->n ? 1 : 0) | (data->n ? 2 : 0)); for (int i = 0; i < 4; i++) bput32(&b, 0); bput32(&b, requesting);
+    put_blob_field(&b, 32, 36, data); put_blob_field(&b, 24, 28, name);
+    send_core(c, &b);
+}
+/* DN_REQ_UPDATE_INFO (2.2.5.1): our new name/data, client -> server */
+static void send_req_update_info(Sess *s, dp8_conn *c)
+{
+    Buf b = {0}; bput32(&b, MSG_REQ_UPDATE_INFO); bput32(&b, next_handle()); bput32(&b, s->local_dpnid);
+    bput32(&b, (s->info_name.n ? 1 : 0) | (s->info_data.n ? 2 : 0)); for (int i = 0; i < 4; i++) bput32(&b, 0);
+    put_blob_field(&b, 24, 28, &s->info_data); put_blob_field(&b, 16, 20, &s->info_name);
+    send_core(c, &b);
+}
 static void send_terminate(dp8_conn *c, const Blob *data)
 {
     Buf b = {0}; bput32(&b, MSG_TERMINATE_SESSION); bput32(&b, 0); bput32(&b, 0);
@@ -468,6 +490,15 @@ static void server_receive(Sess *s, dp8_conn *conn, uint8_t user, const uint8_t 
         } else if (type == MSG_REQ_PROCESS_COMPLETION && n >= 8) {
             ev_receive(s, id, ctx, d + 8, n - 8);
             Buf b = {0}; bput32(&b, MSG_PROCESS_COMPLETION); bput32(&b, rd32(d + 4)); send_core(conn, &b);
+        } else if (type == MSG_REQ_UPDATE_INFO && n >= 32 && created) {   /* a client changed its name or data */
+            uint32_t fl = rd32(d + 12); Blob nm, dt;
+            if (field(d, n, rd32(d + 16), rd32(d + 20), &nm) || field(d, n, rd32(d + 24), rd32(d + 28), &dt)) return;
+            pthread_mutex_lock(&s->m);
+            if (fl & 1) blob_set(&p->name, nm.p, nm.n);
+            if (fl & 2) blob_set(&p->data, dt.p, dt.n);
+            send_update_info(s, conn, rd32(d + 4), id, id, &p->name, &p->data);
+            pthread_mutex_unlock(&s->m);
+            ev_simple(s, M_CLIENT_INFO, 12, id, ctx, 0, 0, 0);       /* {dwSize, dpnidClient, pvPlayerContext} */
         }
         return;
     }
@@ -573,6 +604,14 @@ static void client_receive(Sess *s, dp8_conn *conn, uint8_t user, const uint8_t 
             pthread_mutex_lock(&s->m); int was = s->connected; s->connected = 0; pthread_mutex_unlock(&s->m);
             if (was) ev_simple(s, M_TERMINATE_SESSION, 16, DPNERR_HOSTTERMINATEDSESSION, gcopy(td.p, td.n), td.n, 0, 0);
             dp8_disconnect(conn, 0);
+        } else if (type == MSG_UPDATE_INFO && n >= 44) {
+            uint32_t who = rd32(d + 8), fl = rd32(d + 20); Blob nm, dt;
+            if (field(d, n, rd32(d + 24), rd32(d + 28), &nm) || field(d, n, rd32(d + 32), rd32(d + 36), &dt)) return;
+            pthread_mutex_lock(&s->m); int server = who == s->server_pl.dpnid;
+            if (server && (fl & 1)) blob_set(&s->server_pl.name, nm.p, nm.n);
+            if (server && (fl & 2)) blob_set(&s->server_pl.data, dt.p, dt.n);
+            pthread_mutex_unlock(&s->m);
+            if (server) ev_simple(s, M_SERVER_INFO, 12, who, 0, 0, 0, 0);   /* {dwSize, dpnidServer, pvPlayerContext} */
         } else if (type == MSG_REQ_PROCESS_COMPLETION && n >= 8) {
             ev_receive(s, s->server_pl.dpnid, 0, d + 8, n - 8);
             Buf b = {0}; bput32(&b, MSG_PROCESS_COMPLETION); bput32(&b, rd32(d + 4)); send_core(conn, &b);
@@ -619,6 +658,7 @@ static void net_enum_response(void *ctx, dp8_ep *ep, const struct sockaddr_in *f
     rt_w32(G_MEM, g, 72); rt_w32(G_MEM, g + 4, OFF(12)); memcpy(GP(g + 8), r + 56, 16); memcpy(GP(g + 24), r + 72, 16);
     rt_w32(G_MEM, g + 40, OFF(16)); rt_w32(G_MEM, g + 44, OFF(20)); rt_w32(G_MEM, g + 48, gstr_w(&sn));
     if (ar.n) { rt_w32(G_MEM, g + 64, gcopy(ar.p, ar.n)); rt_w32(G_MEM, g + 68, ar.n); }
+    hexlog("application reserved data received", ar.p, ar.n);
     #undef OFF
     Ev *e = new_event(s, M_ENUM_HOSTS_RESPONSE);
     e->a[0] = address_object(from); e->a[1] = devcopy; e->a[2] = g; e->a[3] = gcopy(rd.p, rd.n); e->a[4] = rd.n; e->a[5] = uctx; e->a[6] = rtt;
@@ -735,6 +775,7 @@ static void read_app_desc(Sess *s, uint32_t ad)
     s->maxplayers = rt_r32(G_MEM, ad + 40);
     wide_blob(&s->sess_name, rt_r32(G_MEM, ad + 48)); wide_blob(&s->password, rt_r32(G_MEM, ad + 52));
     uint32_t ar = rt_r32(G_MEM, ad + 64), arn = rt_r32(G_MEM, ad + 68); blob_set(&s->app_reserved, ar ? GP(ar) : 0, ar ? arn : 0);
+    hexlog("application reserved data set", s->app_reserved.p, s->app_reserved.n);
 }
 static void write_player_info(Ctx *c, uint32_t pinfo, uint32_t psize, const Blob *name, const Blob *data, uint32_t flags, int nargs)
 {
@@ -907,7 +948,9 @@ static void cs_ReturnBuffer(Ctx *c) { uint32_t h = ARG(1); uint32_t p = pending_
 static void cl_SetClientInfo(Ctx *c)
 {
     dump_args("SetClientInfo", c, 5); Obj *o = O(ARG(0)); Sess *s = o ? sess_for(o) : 0; if (!s) RET(DPNERR_INVALIDPARAM, 5);
-    pthread_mutex_lock(&s->m); read_player_info(ARG(1), &s->info_name, &s->info_data); pthread_mutex_unlock(&s->m);
+    pthread_mutex_lock(&s->m); read_player_info(ARG(1), &s->info_name, &s->info_data);
+    if (s->connected && s->srv) send_req_update_info(s, s->srv);       /* the server keeps the name table */
+    pthread_mutex_unlock(&s->m);
     if (ARG(4) & 0x80000000u) RET(S_OK_, 5);
     uint32_t h = next_handle(); if (ARG(3)) rt_w32(G_MEM, ARG(3), h); ev_simple(s, M_ASYNC_OP_COMPLETE, 16, h, ARG(2), 0, 0, 0);
     RET(DPNSUCCESS_PENDING, 5);
@@ -915,7 +958,10 @@ static void cl_SetClientInfo(Ctx *c)
 static void sv_SetServerInfo(Ctx *c)
 {
     dump_args("SetServerInfo", c, 5); Obj *o = O(ARG(0)); Sess *s = o ? sess_for(o) : 0; if (!s) RET(DPNERR_INVALIDPARAM, 5);
-    pthread_mutex_lock(&s->m); read_player_info(ARG(1), &s->info_name, &s->info_data); pthread_mutex_unlock(&s->m);
+    pthread_mutex_lock(&s->m); read_player_info(ARG(1), &s->info_name, &s->info_data);
+    if (s->hosting) for (int i = 0; i < 256; i++) if (s->pl[i].used && s->pl[i].created && s->pl[i].conn)   /* tell the clients */
+        send_update_info(s, s->pl[i].conn, 0, s->server_dpnid, s->server_dpnid, &s->info_name, &s->info_data);
+    pthread_mutex_unlock(&s->m);
     if (ARG(4) & 0x80000000u) RET(S_OK_, 5);
     uint32_t h = next_handle(); if (ARG(3)) rt_w32(G_MEM, ARG(3), h); ev_simple(s, M_ASYNC_OP_COMPLETE, 16, h, ARG(2), 0, 0, 0);
     RET(DPNSUCCESS_PENDING, 5);

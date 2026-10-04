@@ -616,7 +616,10 @@ def main():
     L = Lifter(a.exe, a.analysis); L.jt_cache = {}
     L.imp_index = {va: a.imp_base + k for k, (va, _) in enumerate(L.imports)}
     L.illegal_seh = bool(a.tag)
-    L.hooks = {} if a.tag else HOOKS
+    L.hooks = {} if a.tag else dict(HOOKS)
+    # development: DS_TRACE_HOOKS="0x48bf51,0x713158" adds hooks that log registers and stack arguments (DS_HOOKTRACE=1)
+    for h in filter(None, os.environ.get('DS_TRACE_HOOKS', '').split(',')):
+        if not a.tag: L.hooks.setdefault(int(h, 16), 'trace')
     os.makedirs(a.outdir, exist_ok=True)
     pre = a.tag + '_' if a.tag else ''
     for old in os.listdir(a.outdir):                             # stale files from a previous run

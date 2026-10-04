@@ -18,6 +18,8 @@ static void expect(const char *what, const uint8_t *got, size_t n, const char *h
     if (!ok) { printf("   got "); for (size_t i = 0; i < n; i++) printf("%02X ", got[i]); printf("\n   want %s\n", hex); }
 }
 static void check(const char *what, int ok) { printf("%-46s %s\n", what, ok ? "ok" : "FAILED"); if (!ok) fails++; }
+typedef struct { int n; size_t len[4]; uint8_t user[4], first[4]; } Co;
+static void co_one(void *ctx, uint8_t user, const uint8_t *d, size_t n) { Co *c = ctx; if (c->n < 4) { c->len[c->n] = n; c->user[c->n] = user; c->first[c->n] = n ? d[0] : 0; } c->n++; }
 
 /* ---- session test ---- */
 typedef struct { pthread_mutex_t m; int accepted, connected, closed; size_t got; uint32_t sum; int nmsg; dp8_conn *conn; } Side;
@@ -49,6 +51,22 @@ int main(void)
     n = dp8_enc_sack(b, 0, 3, 6, 0x00115D07, 0); expect("4.2.2 SACK", b, n, "80 06 01 00 03 06 00 00 07 5D 11 00");
     n = dp8_enc_sack(b, 1, 9, 4, 0, 0x5ull | (1ull << 40));
     check("SACK masks round trip", n == 20 && b[2] == (0x01 | 0x02 | 0x04) && b[12] == 5 && b[19] == 0 && b[17] == 1);
+
+    /* [MC-DPL8R] 2.2.3 coalesced payloads: 3 headers (odd: 2 bytes of padding), sizes 5, 300 (BIG_1) and 2,
+     * USER_1 on the second, each payload but the last padded to 4 bytes */
+    {
+        uint8_t f[400] = {0}; size_t o = 0;
+        f[o++] = 5; f[o++] = 0x02 | 0x04;                   /* reliable, sequential */
+        f[o++] = 300 & 0xff; f[o++] = 0x02 | 0x04 | 0x08 | 0x40;  /* + BIG_1 (bit 8 of the size), USER_1 */
+        f[o++] = 2; f[o++] = 0x02 | 0x04 | 0x01;            /* END_COALESCE */
+        o += 2;                                             /* padding */
+        f[o] = 'a'; o += 8;                                 /* 5 bytes + 3 padding */
+        f[o] = 'b'; o += 300;                               /* 300: already aligned */
+        f[o] = 'c'; o += 2;
+        Co co = {0}; int n = dp8_dec_coalesced(f, o, co_one, &co);
+        check("2.2.3 coalesced payloads decode", n == 3 && co.len[0] == 5 && co.len[1] == 300 && co.len[2] == 2 &&
+              co.first[0] == 'a' && co.first[1] == 'b' && co.first[2] == 'c' && co.user[1] == 0x40 && co.user[0] == 0);
+    }
 
     /* ---- a session over loopback ---- */
     for (int pass = 0; pass < 2; pass++) {
