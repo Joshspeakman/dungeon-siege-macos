@@ -52,6 +52,11 @@ OVERRIDES = {
     0x006fcf19: 'Messenger::Notify(const gpstring&, UIWindow*): every interface command',
     0x0069c1be: 'nema::Blender::Update(float dt)',
     0x0060e5fa: 'formula evaluation (const char* formula, ...)',
+    0x005a2c1d: 'FromString(const char*, eAlteration&)',
+    0x005a2c0e: 'ToString(eAlteration)',
+    0x005cde38: 'GoMagic: mana cost of a spell (Go* caster, Go* target, bool)',
+    0x005a8af3: 'Rules::GetDamageRange(Goid, Goid, float&, float&, bool)',
+    0x005c5515: 'GoAttack::GetAttackRange()',
 }
 
 class Unsupported(Exception): pass

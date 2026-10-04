@@ -944,6 +944,154 @@ static struct SetMod *set_modifiers(Ctx *c, const char *file)
     if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: set modifiers %s: %d blocks\n", file, m->n);
     return m;
 }
+/* ---- the expansion's own alterations (eAlteration values past the base engine's table): spell cost and spell damage
+ * (percent), ranged range (metres), special defense, render scale, combat magic to nature magic. The engine loads and
+ * keeps them (its apply switch ignores unknown values); their effects are added where they act: the mana cost of a
+ * spell, the damage range of a spell, a weapon's attack range. A character's amount is the sum over the enchantments of
+ * its equipped items (the engine's per-object sum) plus its set bonuses (evaluated here). ---- */
+static const char *const loa_alter_names[] = {"ALTER_SPECIAL_DEFENSE", "ALTER_SPELL_COST", "ALTER_SPELL_DAMAGE", "ALTER_RANGED_RANGE",
+                                              "ALTER_RENDER_SCALE", "ALTER_COMBAT_MAGIC_TO_NATURE_MAGIC"};
+enum { LA_SPECIAL_DEFENSE, LA_SPELL_COST, LA_SPELL_DAMAGE, LA_RANGED_RANGE, LA_RENDER_SCALE, LA_COMBAT_TO_NATURE, LA_COUNT };
+static uint32_t loa_alter_base(void) { static uint32_t b; if (!b) b = rt_r32(G_MEM, 0x7a3bd0u + 8); return b; }   /* the table's end */
+static uint32_t loa_alter_str[LA_COUNT];
+typedef struct { int which; float v; char group[48]; } LoaBonus;      /* one enchantment of the expansion's kinds */
+static float eval_formula(Ctx *c, const char *f, uint32_t goid)          /* the engine's evaluator (variables of goid) */
+{
+    uint32_t esp = c->esp, out = scratch(c, 4); rt_wf32(G_MEM, out, 0);
+    uint32_t a[6] = {sstr(c, f), 0, out, goid, goid, goid}; w32_callback(c, 0x60e5fau, 6, a);
+    float v = rt_rf32(G_MEM, out); scratch_end(c, esp); return v;
+}
+static int loa_alter_index(const char *name) { for (int k = 0; k < LA_COUNT; k++) if (!strcasecmp(name, loa_alter_names[k])) return k; return -1; }
+/* set bonuses of these kinds, per wielder (filled by the set recount) */
+static struct { uint32_t go; int n; LoaBonus b[16]; } set_bonus[32];
+static void set_alteration_sums(Ctx *c, uint32_t wielder, char group[][64], char file[][64], int n)
+{
+    int slot = -1; for (int i = 0; i < 32; i++) if (set_bonus[i].go == wielder || (slot < 0 && !set_bonus[i].go)) { if (set_bonus[i].go == wielder) { slot = i; break; } slot = i; }
+    if (slot < 0) slot = 0;
+    set_bonus[slot].go = wielder; set_bonus[slot].n = 0; uint32_t wg = GO_GOID(wielder);
+    for (int i = 0; i < n; i++) {
+        int count = 0; for (int j = 0; j < n; j++) count += !strcasecmp(group[i], group[j]);
+        GasBlock *b = layer_gas("world/contentdb/components/set_items/set_items.gas", file[i]);
+        for (int m = 0; b && m < b->nchild; m++) {
+            GasBlock *mod = b->child[m], *en = gas_child(mod, "enchantments");
+            if (count < atoi(gas_get(mod, "set_item_requirement", "0")) || !en) continue;
+            for (int e = 0; e < en->nchild && set_bonus[slot].n < 16; e++) {
+                int k = loa_alter_index(gas_get(en->child[e], "alteration", "")); if (k < 0) continue;
+                const char *val = gas_get(en->child[e], "value", "0"); char f[512]; size_t o = 0;
+                for (const char *q = val; *q && o < 480; ) { if (!strncasecmp(q, "#itemsequipped", 14)) { o += (size_t)snprintf(f + o, 16, "%d", count); q += 14; } else f[o++] = *q++; }
+                f[o] = 0;
+                LoaBonus *lb = &set_bonus[slot].b[set_bonus[slot].n++];
+                lb->which = k; lb->v = eval_formula(c, f, wg); snprintf(lb->group, sizeof lb->group, "%s", gas_get(en->child[e], "imbued_spell_group", ""));
+                char *qq = lb->group; if (*qq == '"') { memmove(qq, qq + 1, strlen(qq)); char *z = strchr(qq, '"'); if (z) *z = 0; }
+            }
+        }
+        gas_free(b);
+    }
+}
+/* an item's enchantments of these kinds: its template's [magic][enchantments] (through the engine's fuel) and its
+ * random prefix and suffix (pcontent.gas [modifiers]) */
+typedef struct { int which; char value[160]; char group[48]; } LoaEnchDef;
+static int fuel_string(Ctx *c, uint32_t h, const char *key, char *out, size_t cap)
+{
+    uint32_t esp = c->esp, g = scratch(c, 16); ext_thiscall(c, GPSTR_CTOR, g, 0, 0);
+    uint32_t a[3] = {sstr(c, key), g, 1}; int ok = (int)(ext_thiscall(c, 0x444228u, h, 3, a) & 0xff);
+    snprintf(out, cap, "%s", ok ? gpstr_text(g) : ""); ext_thiscall(c, 0x48899au, g, 0, 0); scratch_end(c, esp);
+    char *q = out; if (*q == '"') { memmove(q, q + 1, strlen(q)); char *z = strchr(q, '"'); if (z) *z = 0; }
+    return ok && *out;
+}
+static GasBlock *pcontent_modifiers(void)
+{
+    static GasBlock *g; static int tried; if (!tried) { tried = 1; g = layer_gas("world/contentdb/pcontent.gas", "modifiers"); }
+    return g;
+}
+static int item_enchantments(Ctx *c, uint32_t item, LoaEnchDef *out, int max)
+{
+    static struct { uint32_t item; char key[160]; int n; LoaEnchDef d[8]; } cache[128]; static int next;
+    uint32_t mg = go_comp(c, item, "?GetMagic@Go@@QAEPAVGoMagic@@XZ"); if (!mg) return 0;
+    char key[160]; snprintf(key, sizeof key, "%s|%s|%s", go_template(c, item),
+        gpstr_text(ext_thiscall(c, FX("?GetPrefixModifierName@GoMagic@@QBEABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@XZ"), mg, 0, 0)),
+        gpstr_text(ext_thiscall(c, FX("?GetSuffixModifierName@GoMagic@@QBEABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@XZ"), mg, 0, 0)));
+    for (int i = 0; i < 128; i++) if (cache[i].item == item && !strcmp(cache[i].key, key)) { int n = cache[i].n < max ? cache[i].n : max; memcpy(out, cache[i].d, sizeof *out * (size_t)n); return n; }
+    int n = 0;
+    uint32_t data = rt_r32(G_MEM, mg + 8);                                  /* the template's [magic] */
+    if (data) {
+        uint32_t esp = c->esp, h = scratch(c, 16), vec = scratch(c, 16); memset(GP(vec), 0, 16);
+        uint32_t ga[2] = {h, sstr(c, "enchantments")}; ext_thiscall(c, 0x53314bu, data, 2, ga);
+        if (rt_r32(G_MEM, h) || rt_r32(G_MEM, h + 4)) {
+            uint32_t la[2] = {vec, 1}; ext_thiscall(c, FUEL_CHILDREN, h, 2, la);
+            for (uint32_t e = rt_r32(G_MEM, vec + 4), end = rt_r32(G_MEM, vec + 8); e && e < end && n < max && n < 8; e += 8) {
+                char alt[64]; if (!fuel_string(c, e, "alteration", alt, sizeof alt)) continue;
+                int k = loa_alter_index(alt); if (k < 0) continue;
+                out[n].which = k; fuel_string(c, e, "value", out[n].value, sizeof out[n].value);
+                fuel_string(c, e, "imbued_spell_group", out[n].group, sizeof out[n].group); n++;
+            }
+            ext_thiscall(c, FUEL_CHILDREN_FREE, vec, 0, 0);
+        }
+        ext_thiscall(c, FUEL_FREE, h, 0, 0); scratch_end(c, esp);
+    }
+    GasBlock *pc = pcontent_modifiers(); char names[160]; snprintf(names, sizeof names, "%s", key);
+    char *bar = strchr(names, '|'); char *pre = bar ? bar + 1 : 0, *suf = pre ? strchr(pre, '|') : 0; if (suf) *suf++ = 0;
+    const char *mods[2] = {pre, suf};
+    for (int m = 0; m < 2 && pc; m++) {
+        GasBlock *b = mods[m] && *mods[m] ? gas_child(pc, mods[m]) : 0;
+        for (int e = 0; b && e < b->nchild && n < max && n < 8; e++) {
+            int k = loa_alter_index(gas_get(b->child[e], "alteration", "")); if (k < 0) continue;
+            out[n].which = k; snprintf(out[n].value, sizeof out[n].value, "%s", gas_get(b->child[e], "value", "0"));
+            snprintf(out[n].group, sizeof out[n].group, "%s", gas_get(b->child[e], "imbued_spell_group", "")); n++;
+        }
+    }
+    int slot = next; next = (next + 1) % 128;
+    cache[slot].item = item; snprintf(cache[slot].key, sizeof cache[slot].key, "%s", key); cache[slot].n = n; memcpy(cache[slot].d, out, sizeof *out * (size_t)n);
+    return n;
+}
+static int character_bonuses(Ctx *c, uint32_t go, LoaBonus *out, int max)   /* sets + equipped items (cached 0.5 s) */
+{
+    static struct { uint32_t go; double at; int n; LoaBonus b[32]; } cache[32]; static int next;
+    double now = (double)clock() / CLOCKS_PER_SEC;
+    for (int i = 0; i < 32; i++) if (cache[i].go == go && now - cache[i].at < 0.5) { int n = cache[i].n < max ? cache[i].n : max; memcpy(out, cache[i].b, sizeof *out * (size_t)n); return n; }
+    int n = 0;
+    for (int i = 0; i < 32; i++) if (set_bonus[i].go == go) for (int k = 0; k < set_bonus[i].n && n < 32; k++) out[n++] = set_bonus[i].b[k];
+    uint32_t inv = go_comp(c, go, "?GetInventory@Go@@QAEPAVGoInventory@@XZ");
+    if (inv) {
+        static uint32_t all[256]; int na = item_list_at(c, inv, all, 256, "il_all");
+        for (int q = 0; q < na && n < 32; q++) {
+            uint32_t it = all[q];
+            if (!(ext_thiscall(c, FX("?IsEquipped@GoInventory@@QBE_NPBVGo@@@Z"), inv, 1, &it) & 0xff)) continue;
+            LoaEnchDef d[8]; int nd = item_enchantments(c, it, d, 8);
+            for (int k = 0; k < nd && n < 32; k++) { out[n].which = d[k].which; out[n].v = eval_formula(c, d[k].value, GO_GOID(go)); snprintf(out[n].group, sizeof out[n].group, "%s", d[k].group); n++; }
+        }
+    }
+    int slot = -1; for (int i = 0; i < 32; i++) if (cache[i].go == go) slot = i;
+    if (slot < 0) { slot = next; next = (next + 1) % 32; }
+    cache[slot].go = go; cache[slot].at = now; cache[slot].n = n < 32 ? n : 32; memcpy(cache[slot].b, out, sizeof *out * (size_t)cache[slot].n);
+    return n;
+}
+static int spell_in_group(const char *spell, const char *group)        /* world/global/monster_types.gas [group*] */
+{
+    if (!*group) return 1;
+    static GasBlock *mt; static int tried; if (!tried) { tried = 1; mt = layer_gas("world/global/monster_types.gas", "monster_types"); }
+    for (int i = 0; mt && i < mt->nchild; i++) {
+        GasBlock *g = mt->child[i]; const char *nm = gas_get(g, "name", ""); char n2[64]; snprintf(n2, sizeof n2, "%s", nm);
+        if (*n2 == '"') { memmove(n2, n2 + 1, strlen(n2)); char *z = strchr(n2, '"'); if (z) *z = 0; }
+        if (strcasecmp(n2, group)) continue;
+        GasBlock *t = gas_child(g, "templates");
+        for (int k = 0; t && k < t->nkey; k++) if (!strcasecmp(t->val[k], spell)) return 1;
+        return 0;
+    }
+    return 0;
+}
+/* the factor a character's bonuses give a spell's cost or damage: values from 1 up are percentages (5 = 5%), smaller
+ * ones factors (the Book of Trickery's 0.7) */
+static float spell_factor(Ctx *c, uint32_t caster, int which, const char *spell)
+{
+    LoaBonus b[32]; int n = character_bonuses(c, caster, b, 32); float f = 1;
+    for (int i = 0; i < n; i++) {
+        if (b[i].which != which || !spell_in_group(spell, b[i].group) || b[i].v <= 0) continue;
+        if (b[i].v < 1) f *= which == LA_SPELL_COST ? b[i].v : 1 / b[i].v;
+        else f *= which == LA_SPELL_COST ? (b[i].v >= 100 ? 0 : 1 - b[i].v / 100) : 1 + b[i].v / 100;
+    }
+    return f;
+}
 static void set_items_update(Ctx *c, uint32_t wielder)
 {
     uint32_t inv = wielder ? go_comp(c, wielder, "?GetInventory@Go@@QAEPAVGoInventory@@XZ") : 0, wg = wielder ? GO_GOID(wielder) : 0;
@@ -971,6 +1119,7 @@ static void set_items_update(Ctx *c, uint32_t wielder)
         }
         if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: %08x wears %d of set %s (%s)\n", wielder, count, group[i], file[i]);
     }
+    set_alteration_sums(c, wielder, group, file, n);
     modifiers_dirty(c, wielder);
 }
 static int override_impl(Ctx *c, uint32_t addr);
@@ -1090,6 +1239,45 @@ static int override_impl(Ctx *c, uint32_t addr)
         }
         o[k] = 0; rt_w32(G_MEM, c->esp + 4, buf);
         return 0;
+    }
+    case 0x5a2c1d: {                                  /* bool FromString(const char*, eAlteration&): the expansion's names */
+        uint32_t p = ARG(0); const char *n = p ? GS(p) : "";
+        for (int k = 0; k < LA_COUNT; k++) if (!strcasecmp(n, loa_alter_names[k])) { rt_w32(G_MEM, ARG(1), loa_alter_base() + (uint32_t)k); c->eax = 1; c->esp += 4; return 1; }
+        return 0;
+    }
+    case 0x5a2c0e: {                                  /* const char* ToString(eAlteration) */
+        uint32_t v = ARG(0), b = loa_alter_base(); if (v < b || v >= b + LA_COUNT) return 0;
+        if (!loa_alter_str[v - b]) loa_alter_str[v - b] = gstr(loa_alter_names[v - b]);
+        c->eax = loa_alter_str[v - b]; c->esp += 4; return 1;
+    }
+    case 0x5cde38: {                                  /* GoMagic: mana cost (Go* caster, Go* target, bool): spell cost */
+        static int inside; if (inside || !ARG(0)) return 0;
+        float f = spell_factor(c, ARG(0), LA_SPELL_COST, go_template(c, COMP_GO(c->ecx))); if (f == 1) return 0;
+        uint32_t a[3] = {ARG(0), ARG(1), ARG(2)}; inside = 1; double v = ext_thiscall_f(c, addr, c->ecx, 3, a); inside = 0;
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: mana cost of %s x%.2f -> %.1f\n", go_template(c, COMP_GO(c->ecx)), f, v * f);
+        v *= f;
+        FPUSH(v); c->esp += 4 + 12; return 1;
+    }
+    case 0x5a8af3: {                                  /* Rules::GetDamageRange(Goid attacker, Goid weapon, float&, float&, bool) */
+        static int inside; if (inside) return 0;
+        uint32_t a[5] = {ARG(0), ARG(1), ARG(2), ARG(3), ARG(4)}; inside = 1; uint32_t r = ext_thiscall(c, addr, c->ecx, 5, a); inside = 0;
+        uint32_t att = goid_go(c, a[0]), wpn = goid_go(c, a[1]);
+        if (att && wpn && (ext_thiscall(c, FX("?IsSpell@Go@@QBE_NXZ"), wpn, 0, 0) & 0xff)) {   /* spell damage */
+            float f = spell_factor(c, att, LA_SPELL_DAMAGE, go_template(c, wpn));
+            if (f != 1) { rt_wf32(G_MEM, a[2], rt_rf32(G_MEM, a[2]) * f); rt_wf32(G_MEM, a[3], rt_rf32(G_MEM, a[3]) * f); }
+        }
+        c->eax = r; c->esp += 4 + 20; return 1;
+    }
+    case 0x5c5515: {                                  /* GoAttack::GetAttackRange(): ranged range */
+        static int inside; if (inside) return 0;
+        uint32_t wpn = COMP_GO(c->ecx), holder = wpn ? ext_thiscall(c, FX("?GetParent@Go@@QBEPAV1@XZ"), wpn, 0, 0) : 0; float add = 0;
+        LoaEnchDef d[8]; int nd = wpn ? item_enchantments(c, wpn, d, 8) : 0;              /* the weapon's own */
+        for (int k = 0; k < nd; k++) if (d[k].which == LA_RANGED_RANGE) add += eval_formula(c, d[k].value, holder ? GO_GOID(holder) : GO_GOID(wpn));
+        for (int i = 0; holder && i < 32; i++) if (set_bonus[i].go == holder)              /* and its wielder's set bonuses */
+            for (int k = 0; k < set_bonus[i].n; k++) if (set_bonus[i].b[k].which == LA_RANGED_RANGE) add += set_bonus[i].b[k].v;
+        if (add <= 0) return 0;
+        inside = 1; double v = ext_thiscall_f(c, addr, c->ecx, 0, 0); inside = 0;
+        FPUSH(v + add); c->esp += 4; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
@@ -1373,7 +1561,18 @@ static void key_untransform(Ctx *c)
         static uint32_t es_none, ao; if (!ao) { fubi_enum(c, "eEquipSlot", "es_any", &es_none); fubi_enum(c, "eActionOrigin", "ao_command", &ao); }
         char list[512]; snprintf(list, sizeof list, "%s", getenv("DS_LOA_SETTEST"));
         uint32_t inv = go_comp(c, m[0], "?GetInventory@Go@@QAEPAVGoInventory@@XZ");
-        static uint32_t made[16]; static int nmade;                 /* first Y: made; second Y: equipped (as in play) */
+        static uint32_t made[16]; static int nmade, phase;           /* Y: made; Y: equipped (as in play); Y: bonuses listed */
+        if (!nmade && phase == 2) {
+            LoaBonus b[32]; int n = character_bonuses(c, m[0], b, 32);
+            fprintf(stderr, "loa: %d expansion bonuses on %08x\n", n, m[0]);
+            for (int i = 0; i < n; i++) fprintf(stderr, "loa:   %s %.2f group '%s'\n", loa_alter_names[b[i].which], b[i].v, b[i].group);
+            fprintf(stderr, "loa: spell_sleepygas cost x%.2f, spell_fireball cost x%.2f\n", spell_factor(c, m[0], LA_SPELL_COST, "spell_sleepygas"), spell_factor(c, m[0], LA_SPELL_COST, "spell_fireball"));
+            RET(1, 0);
+        }
+        phase++;
+        uint32_t actor0 = GO_ACTOR(m[0]);                            /* (strong enough for any requirement) */
+        for (const char *const *sk = (const char *const[]){"Strength", "Dexterity", "Intelligence", 0}; *sk && actor0; sk++) { uint32_t e = skill_entry(actor0, *sk); if (e) rt_wf32(G_MEM, e + 0x34, 60); }
+        modifiers_dirty(c, m[0]);
         if (nmade) {
             for (int i = 0; i < nmade && inv; i++) { uint32_t e[3] = {es_none, made[i], ao}; ext_thiscall(c, FX("?RSAutoEquip@GoInventory@@QAEPAUCookie__@FuBi@@W4eEquipSlot@@PBUGoid_@@W4eActionOrigin@@@Z"), inv, 3, e); }
             fprintf(stderr, "loa: test items equipped\n"); nmade = 0; RET(1, 0);

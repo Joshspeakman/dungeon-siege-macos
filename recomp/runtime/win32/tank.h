@@ -5,12 +5,10 @@
 #include <stddef.h>
 int tank_read(const char *archive, const char *path, uint8_t **out, size_t *len);   /* malloc'd; 0 = found */
 
-#define GAS_MAX_KEYS 32
-#define GAS_MAX_CHILD 512
 typedef struct GasBlock {
-    char name[64]; int nkey, nchild;
-    char key[GAS_MAX_KEYS][48]; char val[GAS_MAX_KEYS][128];
-    struct GasBlock *child[GAS_MAX_CHILD];
+    char name[64]; int nkey, nchild, capkey, capchild;
+    char (*key)[48]; char (*val)[256];          /* grown as needed */
+    struct GasBlock **child;
 } GasBlock;
 GasBlock *gas_parse(const char *text);
 void gas_free(GasBlock *b);

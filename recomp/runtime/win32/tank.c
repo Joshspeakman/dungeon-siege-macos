@@ -92,7 +92,8 @@ static GasBlock *parse_block(const char **p, const char *name, size_t nlen)
             if (n2 && l > (size_t)(n2 - s) + 3 && n2[1] == 'n' && n2[2] == ':') { nm = n2 + 3; l -= (size_t)(nm - s); }
             skip_ws(p); if (**p == '{') (*p)++;
             GasBlock *c = parse_block(p, nm, l);
-            if (b->nchild < GAS_MAX_CHILD) b->child[b->nchild++] = c; else gas_free(c);
+            if (b->nchild == b->capchild) { b->capchild = b->capchild ? b->capchild * 2 : 8; b->child = realloc(b->child, sizeof *b->child * (size_t)b->capchild); }
+            b->child[b->nchild++] = c;
             continue;
         }
         /* key [with a type prefix like "f " or "x "] = value ; */
@@ -106,17 +107,19 @@ static GasBlock *parse_block(const char **p, const char *name, size_t nlen)
         else while (**p && **p != ';' && **p != '\n' && **p != '}') (*p)++;
         const char *ve = *p; while (ve > vs && (ve[-1] == ' ' || ve[-1] == '\t')) ve--;
         if (quoted && **p == '"') (*p)++;
-        if (b->nkey < GAS_MAX_KEYS) {
-            snprintf(b->key[b->nkey], sizeof b->key[0], "%.*s", (int)(ke - sp), sp);
-            snprintf(b->val[b->nkey], sizeof b->val[0], "%.*s", (int)(ve - vs), vs);
-            b->nkey++;
+        if (b->nkey == b->capkey) {
+            b->capkey = b->capkey ? b->capkey * 2 : 8;
+            b->key = realloc(b->key, sizeof *b->key * (size_t)b->capkey); b->val = realloc(b->val, sizeof *b->val * (size_t)b->capkey);
         }
+        snprintf(b->key[b->nkey], sizeof b->key[0], "%.*s", (int)(ke - sp), sp);
+        snprintf(b->val[b->nkey], sizeof b->val[0], "%.*s", (int)(ve - vs), vs);
+        b->nkey++;
         while (**p && **p != ';' && **p != '\n' && **p != '}') (*p)++;
         if (**p == ';') (*p)++;
     }
 }
 GasBlock *gas_parse(const char *text) { const char *p = text; return parse_block(&p, "", 0); }
-void gas_free(GasBlock *b) { if (!b) return; for (int i = 0; i < b->nchild; i++) gas_free(b->child[i]); free(b); }
+void gas_free(GasBlock *b) { if (!b) return; for (int i = 0; i < b->nchild; i++) gas_free(b->child[i]); free(b->child); free(b->key); free(b->val); free(b); }
 GasBlock *gas_child(GasBlock *b, const char *name)
 {
     if (!b) return 0;
