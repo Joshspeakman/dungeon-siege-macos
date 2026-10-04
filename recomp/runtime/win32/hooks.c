@@ -55,8 +55,17 @@ static void skrit_message(Ctx *c)
     uint32_t fmt = rt_r32(G_MEM, c->esp + 12);
     if (fmt < 0x720000 || fmt >= 0x7ac000) return;          /* the messages are string constants in the exe (.rdata/.data) */
     char msg[1024]; guest_format(msg, sizeof msg, rt_r32(G_MEM, c->esp + 12), c->esp + 16);
-    uint32_t level = rt_r32(G_MEM, c->esp + 8);
-    fprintf(stderr, "skrit %s: %s\n", level >= 2 ? "error" : level == 1 ? "warning" : "note", msg);
+    uint32_t level = rt_r32(G_MEM, c->esp + 8), self = rt_r32(G_MEM, c->esp + 4);
+    /* the file being compiled: a string field of the compiler object (found once by looking for a .skrit path) */
+    static int name_off = -1; const char *file = "";
+    for (int pass = 0; pass < 2 && !*file; pass++)
+        for (int off = pass ? 0 : (name_off < 0 ? 0 : name_off); off < (pass ? 0x400 : (name_off < 0 ? 0 : name_off + 4)); off += 4) {
+            uint32_t p = rt_r32(G_MEM, self + (uint32_t)off);
+            if (p >= 0xffff0000u || !readable(p) || !readable(p + 259)) continue;
+            const char *t = (const char *)GP(p); size_t n = strnlen(t, 260);
+            if (n > 6 && n < 260 && (strstr(t, ".skrit") || strstr(t, "skrit"))) { file = t; name_off = off; break; }
+        }
+    fprintf(stderr, "skrit %s: %s%s%s\n", level >= 2 ? "error" : level == 1 ? "warning" : "note", *file ? file : "", *file ? ": " : "", msg);
 }
 
 void rt_hook(Ctx *c, uint32_t addr)
@@ -64,6 +73,7 @@ void rt_hook(Ctx *c, uint32_t addr)
     switch (addr) {
     case 0x0059000f: mood_loaded(c); break;
     case 0x0061d06c: skrit_message(c); break;
+    case 0x004acb46: case 0x005d1fcf: case 0x004036a8: { extern int loa_active; void loa_hook(Ctx *, uint32_t); if (loa_active) loa_hook(c, addr); break; }
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */
         if (getenv("DS_HOOKTRACE")) fprintf(stderr, "hook %08x: eax %08x ecx %08x edx %08x ebx %08x esi %08x edi %08x | ret %08x args %08x %08x %08x %08x\n",
                                             addr, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi, rt_r32(G_MEM, c->esp), rt_r32(G_MEM, c->esp + 4),
@@ -74,4 +84,11 @@ void rt_hook(Ctx *c, uint32_t addr)
                 fprintf(stderr, "   arg%d:", k); for (uint32_t j = 0; j < 80; j++) fprintf(stderr, " %02x", G_MEM[p + j]); fprintf(stderr, "\n");
             }
     }
+}
+
+/* lift.py OVERRIDES: the expansion's engine changes take over a few functions when Legends of Aranna is played */
+int rt_override(Ctx *c, uint32_t addr)
+{
+    extern int loa_active; int loa_override(Ctx *, uint32_t);
+    return loa_active ? loa_override(c, addr) : 0;
 }
