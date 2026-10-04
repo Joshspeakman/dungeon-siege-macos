@@ -356,7 +356,11 @@ static void ensure_resolution(const char *drive_c)
 {
     char dir[1200], path[1300];
     const char *exp = getenv("DS_EXPANSION");      /* Legends of Aranna has its own settings and saves (runtime/win32/core.c) */
-    snprintf(dir, sizeof dir, "%s/Users/player/Documents%s/Dungeon Siege", drive_c, exp && *exp ? "/Legends of Aranna" : "");
+    snprintf(dir, sizeof dir, "%s/Users/player/Documents/Dungeon Siege%s", drive_c, exp && *exp ? " LOA" : "");
+    if (exp && *exp) {                             /* this port's earlier place for the expansion's folder: moved once */
+        char old[1300]; snprintf(old, sizeof old, "%s/Users/player/Documents/Legends of Aranna/Dungeon Siege", drive_c);
+        struct stat st; if (!stat(old, &st) && stat(dir, &st)) { rename(old, dir); *strrchr(old, '/') = 0; rmdir(old); }
+    }
     snprintf(path, sizeof path, "%s/DungeonSiege.ini", dir);
     int w = w32_screen_w, h = w32_screen_h, force = 0;
     const char *r = getenv("DS_RESOLUTION");
