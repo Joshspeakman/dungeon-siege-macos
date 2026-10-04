@@ -56,8 +56,8 @@ sorts it), set-item bonuses and the expansion's new item bonuses. While transfor
 Not done yet, or simplified:
 
 - Transformation spells: the character becomes the creature (its model, skins and animations) and changes back when
-  the spell ends or with Untransform. A game saved while transformed stores the character in their own form; after
-  loading, they stay in their own form until the spell's time runs out.
+  the spell ends or with Untransform. A game saved while transformed loads with the character transformed again
+  until the spell's time runs out.
 - Set items: the bonuses for wearing several pieces of a set apply, and are recounted whenever a piece changes hands.
 - The expansion's new kinds of item bonus: spell cost and spell damage (for the spell groups they name, such as fire or
   healing spells), weapon range, and the chance to cast a spell at an attacker when hit (special defense) work, from
