@@ -441,12 +441,15 @@ static int untransform_go(Ctx *c, uint32_t go)
     return 1;
 }
 /* transformed: by a spell this session (the side table is per object, so it is checked against the actor's state) */
+static int generic_states(uint32_t actor, uint32_t *node, int max);
 static int is_transformed(Ctx *c, uint32_t go)
 {
     if (!go || !side_get(go, S_TRANSFORM, 0)) return 0;
     if (getenv("DS_LOA_TRANSFORMTEST")) return 1;
-    uint32_t actor = GO_ACTOR(go); static uint32_t name; if (!name) name = gstr("transformed");
-    return actor && (ext_thiscall(c, FX("?HasGenericState@GoActor@@QBE_NPBD@Z"), actor, 1, &name) & 0xff);
+    uint32_t actor = GO_ACTOR(go), node[64]; if (!actor) return 0;
+    int n = generic_states(actor, node, 64);              /* "Transformed" (spells) or "transformed" (doppelgangers) */
+    for (int i = 0; i < n; i++) { uint32_t k = rt_r32(G_MEM, node[i] + 0xc); if (k && !strcasecmp(GS(k), "transformed")) return 1; }
+    return 0;
 }
 static void TransformationManager_STransformMe(Ctx *c)          /* (Go*, gpstring& creature template, gpstring& spell) */
 {
@@ -544,7 +547,12 @@ static int redistribute_potions(Ctx *c, uint32_t except)
     return 1;
 }
 static void GoCommon_SToggleTriggeredEffects(Ctx *c) { RET(0, 2); }
-static void GoDb_SRemoveEnchantments(Ctx *c) { RET(0, 3); }
+static void GoDb_SRemoveEnchantments(Ctx *c)      /* (Goid target, Goid source, bool now): the engine's own removal by source */
+{
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: removing enchantments of %08x from %08x (now %u)\n", ARG(1), ARG(0), ARG(2) & 0xff);
+    uint32_t a[3] = {ARG(0), ARG(1), ARG(2) & 0xff}; ext_thiscall(c, 0x544d0du, THIS, 3, a);
+    RET(0, 3);
+}
 static void Rules_RSSetNaturalSkillLevel(Ctx *c)    /* (Goid, const char* skill, float level) */
 {
     uint32_t go = goid_go(c, ARG(0)), actor = GO_ACTOR(go), e = actor ? skill_entry(actor, GS(ARG(1))) : 0;
@@ -1160,6 +1168,7 @@ static int end_party_spells(Ctx *c, int transforms)
             if (!hit) continue;
             uint32_t a[5] = {we_deactivate, GO_GOID(member[i]), spell, GO_GOID(member[i]), 0};
             w32_callback(c, fn_post_data, 5, a); done++;
+            if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: ending %s spell %08x of %08x\n", transforms ? "transformation" : "summon", spell, GO_GOID(member[i]));
         }
     }
     return done;
@@ -1178,7 +1187,7 @@ static void key_untransform(Ctx *c)
     if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
     uint32_t m[16];
     if (test && party_members(c, m, 16)) { if (!untransform_go(c, m[0])) transform_go(c, m[0], test); }
-    else if (spell && party_members(c, m, 16) && is_transformed(c, m[0])) end_party_spells(c, 1);
+    else if (spell && party_members(c, m, 16) && is_transformed(c, m[0])) { if (!end_party_spells(c, 1)) fprintf(stderr, "loa: no transformation to end\n"); }
     else if (spell && party_members(c, m, 16)) {
         static uint32_t we_cast; if (!we_cast) fubi_enum(c, "eWorldEvent", getenv("DS_LOA_SPELLEVENT") ? getenv("DS_LOA_SPELLEVENT") : "we_req_cast", &we_cast);
         uint32_t esp = c->esp, hero = GO_GOID(m[0]), a[2] = {hero, sstr(c, spell)};
