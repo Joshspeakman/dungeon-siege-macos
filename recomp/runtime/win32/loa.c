@@ -59,7 +59,7 @@ static int map_nodes(uint32_t map, uint32_t *node, int max)
 typedef struct { uint32_t key, kind; uint32_t v; } Side;
 static Side side[16384]; static pthread_mutex_t side_lock = PTHREAD_MUTEX_INITIALIZER;
 enum { S_ALLOW_MOVE = 1, S_LODFI, S_PCONTENT_INV, S_DAMAGE_TAKER, S_SPELLBOOK, S_IS_SET_ITEM, S_SET_COUNT, S_REAL_MINUTES, S_COPY_INV,
-       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT, S_BLEND_SPEED };
+       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT, S_BLEND_SPEED, S_SET_GROUP, S_SET_FILE };
 static uint32_t side_get(uint32_t key, uint32_t kind, uint32_t dflt)
 {
     pthread_mutex_lock(&side_lock); uint32_t h = (key * 2654435761u ^ kind * 40503u) & 16383, r = dflt;
@@ -310,8 +310,23 @@ static void GoAspect_SetDamageTaker(Ctx *c) { side_set(THIS, S_DAMAGE_TAKER, ARG
 static void GoAspect_ClearDamageTaker(Ctx *c) { side_set(THIS, S_DAMAGE_TAKER, 0); RET(0, 0); }
 static void GoAspect_SSetIsSetItem(Ctx *c) { side_set(THIS, S_IS_SET_ITEM, ARG(0) & 0xff); RET(0, 1); }
 static void GoAspect_SSetItemNumbers(Ctx *c) { side_set(THIS, S_SET_COUNT, ARG(0)); RET(0, 1); }
-static void GoAspect_SSetItemSetGroup(Ctx *c) { RET(0, 2); }
-static void GoAspect_SSetItemSetModName(Ctx *c) { RET(0, 1); }
+/* a set item's set and modifier block, from its set_item script (strings interned; the side table keeps the index) */
+static const char *interned[1024]; static int n_interned;
+static uint32_t intern(const char *s)
+{
+    for (int i = 0; i < n_interned; i++) if (!strcmp(interned[i], s)) return (uint32_t)i + 1;
+    if (n_interned >= 1024) return 0;
+    interned[n_interned++] = strdup(s); return (uint32_t)n_interned;
+}
+static const char *interned_str(uint32_t i) { return i && i <= (uint32_t)n_interned ? interned[i - 1] : ""; }
+static void GoAspect_SSetItemSetGroup(Ctx *c)           /* (gpstring& set name, gpstring& compare name) */
+{
+    uint32_t t = rt_r32(G_MEM, ARG(1)); side_set(THIS, S_SET_GROUP, intern(t ? GS(t) : "")); RET(0, 2);
+}
+static void GoAspect_SSetItemSetModName(Ctx *c)          /* (gpstring& modifier file) */
+{
+    uint32_t t = rt_r32(G_MEM, ARG(0)); side_set(THIS, S_SET_FILE, intern(t ? GS(t) : "")); RET(0, 1);
+}
 static void GoAspect_SInitISModifierData(Ctx *c) { RET(0, 0); }
 
 /* ---- nema (the renderer's model instances): alpha and ambience live in the instance's diffuse colour ---- */
@@ -368,7 +383,15 @@ static void GoInventory_IsNonAggressivePack(Ctx *c)    /* pack mules don't fight
     int pack = ext_thiscall(c, FX("?IsPackOnly@GoInventory@@QBE_NXZ"), THIS, 0, 0) & 0xff;
     RET(pack && go_template_bool(c, COMP_GO(THIS), "inventory", "is_nonaggressive_pack", 1), 0);
 }
-static void GoInventory_SSetDirtySetItem(Ctx *c) { RET(0, 2); }
+static void set_items_update(Ctx *c, uint32_t wielder);
+static void GoInventory_SSetDirtySetItem(Ctx *c)       /* (Go* item, machine): a set item was equipped, removed, picked up or dropped */
+{
+    /* the scripts call this while the item is still changing hands: the bonuses are recounted on the next frame */
+    extern uint32_t set_pending[8]; uint32_t w = COMP_GO(THIS); int i = 0;
+    while (i < 8 && set_pending[i] && set_pending[i] != w) i++;
+    if (i < 8) set_pending[i] = w;
+    RET(0, 2);
+}
 static void GoInventory_TestGet1(Ctx *c) { uint32_t a = ARG(0); RET(ext_thiscall(c, FX("?TestGet@GoInventory@@QBE_NPBUGoid_@@@Z"), THIS, 1, &a) & 0xff, 1); }
 static void GoInventory_TestGet2(Ctx *c) { uint32_t a[2] = {ARG(0), ARG(1)}; RET(ext_thiscall(c, FX("?TestGet@GoInventory@@QBE_NPBUGoid_@@_N@Z"), THIS, 2, a) & 0xff, 2); }
 static void GoInventory_GetGridbox(Ctx *c) { RET(ext_thiscall(c, FX("?GetGridbox@GoInventory@@QBEPAVUIGridbox@@XZ"), THIS, 0, 0), 0); }
@@ -399,6 +422,7 @@ static void OverheadMap_Singleton(Ctx *c) { RETC(singleton(&g_overhead)); }
 #define BODY_LOAD_CHORES     0x5ba227u   /* GoBody: (re)load its animations from its [body] data onto the current aspect */
 #define UISHELL (rt_r32(G_MEM, 0x7a065cu))
 static void ui_expansion_fixups(Ctx *c);
+static const char *gpstr_text(uint32_t g) { uint32_t p = g ? rt_r32(G_MEM, g) : 0; return p ? GS(p) : ""; }
 static GasBlock *layer_gas(const char *file, const char *block);
 static uint32_t sstr(Ctx *c, const char *s) { uint32_t n = (uint32_t)strlen(s) + 1, g = scratch(c, n); memcpy(GP(g), s, n); return g; }
 static uint32_t template_data(Ctx *c, const char *tmpl, const char *component)
@@ -784,9 +808,13 @@ static int sell_option;
 #define STORE_MANAGER   rt_r32(G_MEM, 0x7a0948u)
 #define STORE_PRICE     0x5dd6b8u    /* GoStore: the price the store pays (Goid item, bool) */
 #define STORE_ADD       0x5db7d0u    /* GoStore::RSAddToStore(Goid item, Goid seller, int price) */
-static int item_list(Ctx *c, uint32_t inv, uint32_t *out, int max)       /* the items in an inventory's grid */
+static int item_list_at(Ctx *c, uint32_t inv, uint32_t *out, int max, const char *where);
+static int item_list(Ctx *c, uint32_t inv, uint32_t *out, int max) { return item_list_at(c, inv, out, max, "il_main"); }   /* the grid */
+static int item_list_at(Ctx *c, uint32_t inv, uint32_t *out, int max, const char *where)
 {
-    static uint32_t il_main; if (!il_main && !fubi_enum(c, "eInventoryLocation", "il_main", &il_main)) return 0;
+    static uint32_t loc[2]; static const char *name[2] = {"il_main", "il_all"}; int w = strcmp(where, "il_main") != 0;
+    if (!loc[w] && !fubi_enum(c, "eInventoryLocation", name[w], &loc[w])) return 0;
+    uint32_t il_main = loc[w];
     uint32_t coll = ext_thiscall(c, FX("?GetTempGopColl2@AIQuery@@QAEAAUGopColl@@XZ"), w32_callback(c, FX("?FUBI_GetClassSingleton@AIQuery@@CAPAV1@XZ"), 0, 0), 0, 0);
     ext_thiscall(c, FX("?Clear@GopColl@@AAEXXZ"), coll, 0, 0);
     uint32_t a[2] = {il_main, coll}; ext_thiscall(c, FX("?ListItems@GoInventory@@QBE_NW4eInventoryLocation@@AAUGopColl@@@Z"), inv, 2, a);
@@ -855,6 +883,95 @@ static void sell_list(Ctx *c, int show)
         ui_text(c, "text_auto_sell", "store", sell_options[sell_option]);
     }
     uint32_t v = !!show; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, lb) + 0x48), lb, 1, &v);
+}
+/* ---- set items: wearing several pieces of a set gives bonuses. Each set item names its set (set_compare_name) and
+ * its modifier block in components/set_items/set_items.gas ([<modifier_file>] { [modifier*] { set_item_requirement;
+ * [enchantments] {...} } }); a block applies once that many pieces of the set are equipped, and its formulas use
+ * #itemsequipped. The blocks become enchantment storages through the content database, as a magic component's own
+ * [enchantments] do, and are applied to the wielder with the wielder as their source, so all of them can be taken off
+ * again (GoDb removal by source) and re-applied whenever a set item changes hands. #itemsequipped is supplied to the
+ * engine's formula evaluator (0x60e5fa) while they are applied. ---- */
+static int set_count_now = -1;
+uint32_t set_pending[8];                   /* wielders whose set bonuses are recounted on the next frame */
+static void set_items_pending(Ctx *c)
+{
+    static int busy; if (busy || !set_pending[0]) return;
+    busy = 1; uint32_t w[8]; memcpy(w, set_pending, sizeof w); memset(set_pending, 0, sizeof set_pending);
+    for (int i = 0; i < 8 && w[i]; i++) set_items_update(c, w[i]);
+    busy = 0;
+}
+#define FUEL_HANDLE          0x44375cu   /* FuelHandle::FuelHandle(const char* address) */
+#define FUEL_COPY            0x43b7c4u   /* FuelHandle copy constructor */
+#define FUEL_FREE            0x43b62bu   /* ~FuelHandle */
+#define FUEL_CHILDREN        0x43b69cu   /* ListChildBlocks(vector<FuelHandle>&, depth) */
+#define FUEL_CHILDREN_FREE   0x43c169u
+#define FUEL_CHILD           0x45d3a7u   /* GetChildBlock(FuelHandle& out, const char*) */
+#define FUEL_GET_INT         0x445ae1u   /* Get(const char* key, int&, bool) */
+#define CDB_ENCHANTMENTS     0x5254e4u   /* ContentDb: enchantment template for a fuel block (holder& out, FuelHandle, int) */
+#define ENCH_HOLDER_FREE     0x5275c2u
+#define ENCH_STORAGE_NEW     0x5a2c30u   /* EnchantmentStorage::EnchantmentStorage(template) (0x14 bytes) */
+#define ENCH_APPLY           0x5a31a5u   /* EnchantmentStorage: apply (Goid target, Goid caster, Goid source, bool) */
+#define GODB_REMOVE_ENCH     0x544d0du   /* GoDb: remove by source (Goid target, Goid source, bool now) */
+static struct SetMod { char file[64]; int n; int req[8]; uint32_t storage[8]; } set_mods[256];
+static int n_set_mods;
+static struct SetMod *set_modifiers(Ctx *c, const char *file)
+{
+    for (int i = 0; i < n_set_mods; i++) if (!strcasecmp(set_mods[i].file, file)) return &set_mods[i];
+    if (n_set_mods >= 256) return 0;
+    struct SetMod *m = &set_mods[n_set_mods++]; memset(m, 0, sizeof *m); snprintf(m->file, sizeof m->file, "%s", file);
+    char addr[160]; snprintf(addr, sizeof addr, "world:contentdb:components:set_items:%s", file);
+    uint32_t esp = c->esp, h = scratch(c, 16), vec = scratch(c, 16), cdb = w32_callback(c, FX("?FUBI_GetClassSingleton@ContentDb@@CAPAV1@XZ"), 0, 0);
+    memset(GP(vec), 0, 16);
+    uint32_t a = sstr(c, addr); ext_thiscall(c, FUEL_HANDLE, h, 1, &a);
+    uint32_t la[2] = {vec, 1}; ext_thiscall(c, FUEL_CHILDREN, h, 2, la);
+    uint32_t key_req = sstr(c, "set_item_requirement"), key_ench = sstr(c, "enchantments");
+    for (uint32_t e = rt_r32(G_MEM, vec + 4), end = rt_r32(G_MEM, vec + 8); e && e < end && m->n < 8; e += 8) {
+        uint32_t lesp = c->esp, rq = scratch(c, 4), ench = scratch(c, 16), copy = scratch(c, 16), holder = scratch(c, 16);
+        rt_w32(G_MEM, rq, 0); uint32_t g[3] = {key_req, rq, 1}; ext_thiscall(c, FUEL_GET_INT, e, 3, g);
+        uint32_t ch[2] = {ench, key_ench}; ext_thiscall(c, FUEL_CHILD, e, 2, ch);
+        ext_thiscall(c, FUEL_COPY, copy, 1, &ench);                       /* passed by value: the callee owns the copy */
+        rt_w32(G_MEM, holder, 0);
+        uint32_t ca[4] = {holder, rt_r32(G_MEM, copy), rt_r32(G_MEM, copy + 4), 0}; ext_thiscall(c, CDB_ENCHANTMENTS, cdb, 4, ca);
+        uint32_t tmpl = rt_r32(G_MEM, holder), st = 0;
+        if (tmpl) { uint32_t sz = 0x14; st = w32_callback(c, 0x403b80u, 1, &sz); if (st) ext_thiscall(c, ENCH_STORAGE_NEW, st, 1, &tmpl); }
+        ext_thiscall(c, ENCH_HOLDER_FREE, holder, 0, 0);
+        ext_thiscall(c, FUEL_FREE, ench, 0, 0);
+        if (st) { m->req[m->n] = (int)rt_r32(G_MEM, rq); m->storage[m->n] = st; m->n++; }
+        scratch_end(c, lesp);
+    }
+    ext_thiscall(c, FUEL_CHILDREN_FREE, vec, 0, 0); ext_thiscall(c, FUEL_FREE, h, 0, 0);
+    scratch_end(c, esp);
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: set modifiers %s: %d blocks\n", file, m->n);
+    return m;
+}
+static void set_items_update(Ctx *c, uint32_t wielder)
+{
+    uint32_t inv = wielder ? go_comp(c, wielder, "?GetInventory@Go@@QAEPAVGoInventory@@XZ") : 0, wg = wielder ? GO_GOID(wielder) : 0;
+    if (!inv || !wg) return;
+    uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+    uint32_t r[3] = {wg, wg, 1}; ext_thiscall(c, GODB_REMOVE_ENCH, godb, 3, r);   /* the previous set bonuses */
+    static uint32_t all[256]; int na = item_list_at(c, inv, all, 256, "il_all");
+    uint32_t items[32]; char group[32][64], file[32][64]; int n = 0;
+    for (int q = 0; q < na && n < 32; q++) {
+        uint32_t it = all[q];
+        if (!(ext_thiscall(c, FX("?IsEquipped@GoInventory@@QBE_NPBVGo@@@Z"), inv, 1, &it) & 0xff)) continue;
+        uint32_t as = GO_ASPECT(it); if (!as) continue;
+        snprintf(group[n], 64, "%s", interned_str(side_get(as, S_SET_GROUP, 0)));
+        snprintf(file[n], 64, "%s", interned_str(side_get(as, S_SET_FILE, 0)));
+        if (*group[n] && *file[n]) items[n++] = it;
+    }
+    for (int i = 0; i < n; i++) {
+        int count = 0; for (int j = 0; j < n; j++) count += !strcasecmp(group[i], group[j]);
+        struct SetMod *m = set_modifiers(c, file[i]); if (!m) continue;
+        for (int k = 0; k < m->n; k++) {
+            if (count < m->req[k]) continue;
+            set_count_now = count;
+            uint32_t a[4] = {wg, wg, wg, 1}; ext_thiscall(c, ENCH_APPLY, m->storage[k], 4, a);
+            set_count_now = -1;
+        }
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: %08x wears %d of set %s (%s)\n", wielder, count, group[i], file[i]);
+    }
+    modifiers_dirty(c, wielder);
 }
 static int override_impl(Ctx *c, uint32_t addr);
 /* an override either performs the whole call or returns 0 to let the original run; calls made while deciding (into the
@@ -957,9 +1074,21 @@ static int override_impl(Ctx *c, uint32_t addr)
         return 0;
     }
     case 0x69c1be: {                                  /* nema::Blender::Update(float dt): a speed modifier scales the step */
+        if (set_pending[0]) set_items_pending(c);     /* (also the frame tick for work deferred from scripts) */
         uint32_t m = side_get(c->ecx, S_BLEND_SPEED, 0);
         if (m) rt_wf32(G_MEM, c->esp + 4, ARGF(0) / bitsf(m));   /* a duration factor: slow 2.0, haste 0.8 ("1 / 0.8 = 1.25") */
         if (m && getenv("DS_LOA_SPEEDTEST")) { static int n; if (!(n++ % 120)) fprintf(stderr, "loa: blender %08x step scaled by 1/%.2f\n", c->ecx, bitsf(m)); }
+        return 0;
+    }
+    case 0x60e5fa: {                                  /* formula evaluation (const char* formula, ...): #itemsequipped */
+        if (set_count_now < 0) return 0;
+        uint32_t f = ARG(0); const char *t = f ? GS(f) : ""; if (!strcasestr(t, "#itemsequipped")) return 0;
+        static uint32_t buf; if (!buf) buf = heap_alloc(w32_process_heap, 8, 8192);
+        char *o = (char *)GP(buf), num[16]; size_t k = 0, nl = (size_t)snprintf(num, sizeof num, "%d", set_count_now);
+        for (const char *q = t; *q && k < 8000; ) {
+            if (!strncasecmp(q, "#itemsequipped", 14)) { memcpy(o + k, num, nl); k += nl; q += 14; } else o[k++] = *q++;
+        }
+        o[k] = 0; rt_w32(G_MEM, c->esp + 4, buf);
         return 0;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
@@ -1103,7 +1232,6 @@ static int quest_get(Ctx *c, const char *key, int is_bool)    /* written for eve
     int r = (int)ext_thiscall(c, is_bool ? FX("?GetQuestBool@GoDb@@QBE_NPBUGoid_@@PBD1@Z") : FX("?GetQuestInt@GoDb@@QBEHPBUGoid_@@PBD1@Z"), godb, 3, a);
     scratch_end(c, esp); return is_bool ? (r & 0xff) : r;
 }
-static const char *gpstr_text(uint32_t g) { uint32_t p = g ? rt_r32(G_MEM, g) : 0; return p ? GS(p) : ""; }
 static void OverheadMap_RSSetCurrentBackground(Ctx *c) { RET(0, 2); }       /* one background (mainland) */
 static void OverheadMap_RSUpdateCurrentAreaMarker(Ctx *c)                    /* (const gpstring& marker, Goid) */
 {
@@ -1241,6 +1369,26 @@ static void key_untransform(Ctx *c)
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
     uint32_t m[16];
     if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
+    if (getenv("DS_LOA_SETTEST") && party_members(c, m, 16)) {     /* development: Y gives the first member these items, equipped */
+        static uint32_t es_none, ao; if (!ao) { fubi_enum(c, "eEquipSlot", "es_any", &es_none); fubi_enum(c, "eActionOrigin", "ao_command", &ao); }
+        char list[512]; snprintf(list, sizeof list, "%s", getenv("DS_LOA_SETTEST"));
+        uint32_t inv = go_comp(c, m[0], "?GetInventory@Go@@QAEPAVGoInventory@@XZ");
+        static uint32_t made[16]; static int nmade;                 /* first Y: made; second Y: equipped (as in play) */
+        if (nmade) {
+            for (int i = 0; i < nmade && inv; i++) { uint32_t e[3] = {es_none, made[i], ao}; ext_thiscall(c, FX("?RSAutoEquip@GoInventory@@QAEPAUCookie__@FuBi@@W4eEquipSlot@@PBUGoid_@@W4eActionOrigin@@@Z"), inv, 3, e); }
+            fprintf(stderr, "loa: test items equipped\n"); nmade = 0; RET(1, 0);
+        }
+        for (char *t = strtok(list, ","); t && inv; t = strtok(0, ",")) {
+            uint32_t esp = c->esp, a[2] = {GO_GOID(m[0]), sstr(c, t)};
+            uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBUGoid_@@PBD@Z"), 2, a);
+            uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+            uint32_t it = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+            scratch_end(c, esp);
+            if (nmade < 16) made[nmade++] = it;
+            fprintf(stderr, "loa: test item %s (%08x) made\n", t, it);
+        }
+        RET(1, 0);
+    }
     if (getenv("DS_LOA_SPEEDTEST") && party_members(c, m, 16)) {   /* development: Y gives the first member's animations a speed modifier */
         uint32_t as = GO_ASPECT(m[0]), np = as ? rt_r32(G_MEM, as + 0x38) : 0, bl = np ? rt_r32(G_MEM, np + 0xe8) : 0;
         float f = (float)atof(getenv("DS_LOA_SPEEDTEST")); side_set(bl, S_BLEND_SPEED, fbits(f));

@@ -51,6 +51,7 @@ OVERRIDES = {
     0x004e2435: 'UIIntro: a beat is over',
     0x006fcf19: 'Messenger::Notify(const gpstring&, UIWindow*): every interface command',
     0x0069c1be: 'nema::Blender::Update(float dt)',
+    0x0060e5fa: 'formula evaluation (const char* formula, ...)',
 }
 
 class Unsupported(Exception): pass
