@@ -36,16 +36,25 @@ The host's router must let the game's traffic in. Either:
   player joins it, and the host gives out its address on that network. Nothing needs to be forwarded, and the game
   behaves as if everyone were on one LAN (both the Network and Internet screens work).
 
-## Windows players
+## Windows and Linux players
 
-All players need the same game version, 1.11.1 (the GOG release). On Windows:
+Mac and PC players can be in the same game, in either direction (tested against the original game on Linux through
+Proton, with Microsoft's DirectPlay). The game itself checks that everyone runs exactly the same thing, so:
 
-1. Turn on DirectPlay: Control Panel → Programs → *Turn Windows features on or off* → **Legacy Components** →
-   **DirectPlay**.
-2. Start the game with the `zonematch=true` argument to open its multiplayer screens: make a shortcut to
-   `DungeonSiege.exe` and add ` zonematch=true` at the end of its *Target*.
+- **The same game build.** Every player needs the GOG release, version 1.11.1. The Steam release is a slightly
+  different build: Steam and GOG copies refuse each other even when both run on Windows.
+- **The executable named `DungeonSiege.exe`.** Its file name is part of the fingerprint the game compares; a renamed
+  copy (e.g. `DungeonSiege_GOG.exe`) is refused.
+- **The same resource files.** Every player needs the same set of `.dsres` archives in `Resources` (and maps in
+  `Maps`): if one player has Yesterhaven or a mod such as `fairyfix.dsres`, everyone needs it. A player who is
+  missing one is told which.
+- **DirectPlay.** On Windows: Control Panel → Programs → *Turn Windows features on or off* → **Legacy Components** →
+  **DirectPlay**. On Linux with Proton or Wine, Wine's own DirectPlay is not enough: install Microsoft's with
+  `protontricks <the game's Steam app id> directplay` (or `winetricks directplay` for a plain Wine prefix).
+- **The multiplayer screens.** Start the game with the `zonematch=true` argument: on Windows, make a shortcut to
+  `DungeonSiege.exe` and add ` zonematch=true` at the end of its *Target*; in Steam, add it to the launch options.
 
-Then host or join exactly as above; Mac and Windows players do not need anything else to play together.
+Then host or join exactly as above.
 
 ## Yesterhaven
 
