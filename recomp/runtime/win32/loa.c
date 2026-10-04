@@ -954,7 +954,7 @@ static const char *const loa_alter_names[] = {"ALTER_SPECIAL_DEFENSE", "ALTER_SP
 enum { LA_SPECIAL_DEFENSE, LA_SPELL_COST, LA_SPELL_DAMAGE, LA_RANGED_RANGE, LA_RENDER_SCALE, LA_COMBAT_TO_NATURE, LA_COUNT };
 static uint32_t loa_alter_base(void) { static uint32_t b; if (!b) b = rt_r32(G_MEM, 0x7a3bd0u + 8); return b; }   /* the table's end */
 static uint32_t loa_alter_str[LA_COUNT];
-typedef struct { int which; float v; char group[48]; } LoaBonus;      /* one enchantment of the expansion's kinds */
+typedef struct { int which; float v; char group[48]; char skrit[200]; } LoaBonus;   /* skrit: special defense's */      /* one enchantment of the expansion's kinds */
 static float eval_formula(Ctx *c, const char *f, uint32_t goid)          /* the engine's evaluator (variables of goid) */
 {
     uint32_t esp = c->esp, out = scratch(c, 4); rt_wf32(G_MEM, out, 0);
@@ -982,6 +982,7 @@ static void set_alteration_sums(Ctx *c, uint32_t wielder, char group[][64], char
                 f[o] = 0;
                 LoaBonus *lb = &set_bonus[slot].b[set_bonus[slot].n++];
                 lb->which = k; lb->v = eval_formula(c, f, wg); snprintf(lb->group, sizeof lb->group, "%s", gas_get(en->child[e], "imbued_spell_group", ""));
+                snprintf(lb->skrit, sizeof lb->skrit, "%s", gas_get(en->child[e], "special_defense_skrit", ""));
                 char *qq = lb->group; if (*qq == '"') { memmove(qq, qq + 1, strlen(qq)); char *z = strchr(qq, '"'); if (z) *z = 0; }
             }
         }
@@ -990,7 +991,7 @@ static void set_alteration_sums(Ctx *c, uint32_t wielder, char group[][64], char
 }
 /* an item's enchantments of these kinds: its template's [magic][enchantments] (through the engine's fuel) and its
  * random prefix and suffix (pcontent.gas [modifiers]) */
-typedef struct { int which; char value[160]; char group[48]; } LoaEnchDef;
+typedef struct { int which; char value[160]; char group[48]; char skrit[200]; } LoaEnchDef;
 static int fuel_string(Ctx *c, uint32_t h, const char *key, char *out, size_t cap)
 {
     uint32_t esp = c->esp, g = scratch(c, 16); ext_thiscall(c, GPSTR_CTOR, g, 0, 0);
@@ -1023,7 +1024,9 @@ static int item_enchantments(Ctx *c, uint32_t item, LoaEnchDef *out, int max)
                 char alt[64]; if (!fuel_string(c, e, "alteration", alt, sizeof alt)) continue;
                 int k = loa_alter_index(alt); if (k < 0) continue;
                 out[n].which = k; fuel_string(c, e, "value", out[n].value, sizeof out[n].value);
-                fuel_string(c, e, "imbued_spell_group", out[n].group, sizeof out[n].group); n++;
+                fuel_string(c, e, "imbued_spell_group", out[n].group, sizeof out[n].group);
+                if (k == LA_SPECIAL_DEFENSE) fuel_string(c, e, "special_defense_skrit", out[n].skrit, sizeof out[n].skrit); else out[n].skrit[0] = 0;
+                n++;
             }
             ext_thiscall(c, FUEL_CHILDREN_FREE, vec, 0, 0);
         }
@@ -1037,7 +1040,8 @@ static int item_enchantments(Ctx *c, uint32_t item, LoaEnchDef *out, int max)
         for (int e = 0; b && e < b->nchild && n < max && n < 8; e++) {
             int k = loa_alter_index(gas_get(b->child[e], "alteration", "")); if (k < 0) continue;
             out[n].which = k; snprintf(out[n].value, sizeof out[n].value, "%s", gas_get(b->child[e], "value", "0"));
-            snprintf(out[n].group, sizeof out[n].group, "%s", gas_get(b->child[e], "imbued_spell_group", "")); n++;
+            snprintf(out[n].group, sizeof out[n].group, "%s", gas_get(b->child[e], "imbued_spell_group", ""));
+            snprintf(out[n].skrit, sizeof out[n].skrit, "%s", gas_get(b->child[e], "special_defense_skrit", "")); n++;
         }
     }
     int slot = next; next = (next + 1) % 128;
@@ -1058,13 +1062,75 @@ static int character_bonuses(Ctx *c, uint32_t go, LoaBonus *out, int max)   /* s
             uint32_t it = all[q];
             if (!(ext_thiscall(c, FX("?IsEquipped@GoInventory@@QBE_NPBVGo@@@Z"), inv, 1, &it) & 0xff)) continue;
             LoaEnchDef d[8]; int nd = item_enchantments(c, it, d, 8);
-            for (int k = 0; k < nd && n < 32; k++) { out[n].which = d[k].which; out[n].v = eval_formula(c, d[k].value, GO_GOID(go)); snprintf(out[n].group, sizeof out[n].group, "%s", d[k].group); n++; }
+            for (int k = 0; k < nd && n < 32; k++) {
+                out[n].which = d[k].which; out[n].v = eval_formula(c, d[k].value, GO_GOID(go));
+                snprintf(out[n].group, sizeof out[n].group, "%s", d[k].group); snprintf(out[n].skrit, sizeof out[n].skrit, "%s", d[k].skrit); n++;
+            }
         }
     }
     int slot = -1; for (int i = 0; i < 32; i++) if (cache[i].go == go) slot = i;
     if (slot < 0) { slot = next; next = (next + 1) % 32; }
     cache[slot].go = go; cache[slot].at = now; cache[slot].n = n < 32 ? n : 32; memcpy(cache[slot].b, out, sizeof *out * (size_t)cache[slot].n);
     return n;
+}
+/* special defense (world/global/skrits/special_defense.skrit, done here): when the wearer is hurt by an enemy, a chance
+ * of value% to run an effect at the attacker, from a helper object (dsx_special_defense_object) whose attack carries
+ * the damage; the skrit's properties come in its query string. */
+static const char *skrit_param(const char *skrit, const char *name, char *out, size_t cap, const char *dflt)
+{
+    snprintf(out, cap, "%s", dflt); const char *q = strchr(skrit, '?'); size_t nl = strlen(name);
+    while (q) {
+        q++; if (!strncasecmp(q, name, nl) && q[nl] == '=') {
+            const char *v = q + nl + 1, *e = strchr(v, '&'); size_t l = e ? (size_t)(e - v) : strlen(v);
+            if (l && *v == '"') { v++; l -= 1; if (l && v[l - 1] == '"') l--; }
+            snprintf(out, cap, "%.*s", (int)l, v); return out;
+        }
+        q = strchr(q, '&');
+    }
+    return out;
+}
+static void special_defense(Ctx *c, uint32_t victim, uint32_t attacker)
+{
+    LoaBonus b[32]; int n = character_bonuses(c, victim, b, 32);
+    static struct { uint32_t go; char skrit[200]; uint32_t helper; double last; } h[64]; static int next;
+    uint32_t wt = w32_callback(c, FX("?FUBI_GetClassSingleton@WorldTime@@CAPAV1@XZ"), 0, 0);
+    double now = wt ? ext_thiscall_f(c, FX("?GetTime@WorldTime@@QBENXZ"), wt, 0, 0) : 0;
+    for (int i = 0; i < n; i++) {
+        if (b[i].which != LA_SPECIAL_DEFENSE || !*b[i].skrit || b[i].v <= 0) continue;
+        int slot = -1; for (int k = 0; k < 64; k++) if (h[k].go == victim && !strcmp(h[k].skrit, b[i].skrit)) { slot = k; break; }
+        char p[64];
+        double reset = atof(skrit_param(b[i].skrit, "reset_time", p, sizeof p, "2.5"));
+        if (slot >= 0 && h[slot].last + reset > now) continue;
+        if ((float)(rand() % 10000) / 100.0f >= b[i].v) continue;
+        if (slot < 0 || !goid_go(c, h[slot].helper)) {               /* the helper carries the damage */
+            if (slot < 0) { slot = next; next = (next + 1) % 64; h[slot].go = victim; snprintf(h[slot].skrit, sizeof h[slot].skrit, "%s", b[i].skrit); }
+            uint32_t esp = c->esp, a[2] = {GO_GOID(victim), sstr(c, "dsx_special_defense_object")};
+            uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBUGoid_@@PBD@Z"), 2, a);
+            ext_thiscall(c, FX("?SetOmni@GoCloneReq@@QAEX_N@Z"), req, 1, (uint32_t[]){1});
+            uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+            h[slot].helper = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+            scratch_end(c, esp);
+            uint32_t hg = goid_go(c, h[slot].helper), atk = hg ? go_comp(c, hg, "?GetAttack@Go@@QAEPAVGoAttack@@XZ") : 0;
+            if (atk) {
+                uint32_t mn = fbits((float)atof(skrit_param(b[i].skrit, "damage_min", p, sizeof p, "2"))); ext_thiscall(c, FX("?SetDamageMinNatural@GoAttack@@QAEXM@Z"), atk, 1, &mn);
+                uint32_t mx = fbits((float)atof(skrit_param(b[i].skrit, "damage_max", p, sizeof p, "10"))); ext_thiscall(c, FX("?SetDamageMaxNatural@GoAttack@@QAEXM@Z"), atk, 1, &mx);
+            }
+            float radius = (float)atof(skrit_param(b[i].skrit, "area_damage_radius", p, sizeof p, "0"));
+            static uint32_t we_activate; if (!we_activate) fubi_enum(c, "eWorldEvent", "we_req_activate", &we_activate);
+            if (radius > 0 && h[slot].helper) { uint32_t m[4] = {we_activate, GO_GOID(victim), h[slot].helper, (uint32_t)(radius * 1000 + 0.5f)}; w32_callback(c, FX("?SendWorldMessage@@YAXW4eWorldEvent@@PBUGoid_@@1K@Z"), 4, m); }
+        }
+        if (!h[slot].helper) continue;
+        h[slot].last = now;
+        char script[64], params[96] = "", lt[16]; skrit_param(b[i].skrit, "effect_script", script, sizeof script, "fireshot");
+        if (!strcasecmp(skrit_param(b[i].skrit, "is_lightning", lt, sizeof lt, "false"), "true"))
+            snprintf(params, sizeof params, "[damage(%g,%g,0)][dur(%g)]", atof(skrit_param(b[i].skrit, "damage_min", p, sizeof p, "2")), atof(skrit_param(b[i].skrit, "damage_max", lt, sizeof lt, "10")), 0.2);
+        static uint32_t we_unknown_init, we_unknown; if (!we_unknown_init) { we_unknown_init = 1; fubi_enum(c, "eWorldEvent", "we_unknown", &we_unknown); }
+        uint32_t fx = w32_callback(c, FX("?FUBI_GetClassSingleton@WorldFx@@KAPAV1@XZ"), 0, 0), esp = c->esp;
+        uint32_t ra[6] = {sstr(c, script), GO_GOID(attacker), GO_GOID(victim), sstr(c, params), h[slot].helper, we_unknown};
+        if (fx) ext_thiscall(c, FX("?SRunScript@WorldFx@@QAEPBUSFxSID_@@PBDPBUGoid_@@101W4eWorldEvent@@@Z"), fx, 6, ra);
+        scratch_end(c, esp);
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: special defense of %08x: %s at %08x\n", victim, script, attacker);
+    }
 }
 static int spell_in_group(const char *spell, const char *group)        /* world/global/monster_types.gas [group*] */
 {
@@ -1278,6 +1344,17 @@ static int override_impl(Ctx *c, uint32_t addr)
         if (add <= 0) return 0;
         inside = 1; double v = ext_thiscall_f(c, addr, c->ecx, 0, 0); inside = 0;
         FPUSH(v + add); c->esp += 4; return 1;
+    }
+    case 0x5a97b8: {                                  /* Rules: damage (Goid victim, Goid attacker, Goid weapon, float, bool, bool, int) */
+        static int inside; if (inside) return 0;
+        uint32_t a[7] = {ARG(0), ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6)};
+        inside = 1; uint32_t r = ext_thiscall(c, addr, c->ecx, 7, a);
+        uint32_t victim = goid_go(c, a[0]), attacker = goid_go(c, a[1]);
+        if (victim && attacker && victim != attacker && bitsf(a[3]) > 0 && (ext_thiscall(c, FX("?HasActor@Go@@QBE_NXZ"), attacker, 0, 0) & 0xff)) {
+            uint32_t mind = GO_MIND(victim);
+            if (!(mind && (ext_thiscall(c, FX("?IsFriend@GoMind@@QBE_NPBVGo@@@Z"), mind, 1, &attacker) & 0xff))) special_defense(c, victim, attacker);
+        }
+        inside = 0; c->eax = r; c->esp += 4 + 28; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
@@ -1567,6 +1644,19 @@ static void key_untransform(Ctx *c)
             fprintf(stderr, "loa: %d expansion bonuses on %08x\n", n, m[0]);
             for (int i = 0; i < n; i++) fprintf(stderr, "loa:   %s %.2f group '%s'\n", loa_alter_names[b[i].which], b[i].v, b[i].group);
             fprintf(stderr, "loa: spell_sleepygas cost x%.2f, spell_fireball cost x%.2f\n", spell_factor(c, m[0], LA_SPELL_COST, "spell_sleepygas"), spell_factor(c, m[0], LA_SPELL_COST, "spell_fireball"));
+            if (getenv("DS_LOA_DEFTEST")) {                          /* a bear hits the hero 20 times */
+                uint32_t esp = c->esp, a2[1] = {sstr(c, "dsx_bear")};
+                uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBD@Z"), 1, a2);
+                uint32_t pl = go_comp(c, m[0], "?GetPlacement@Go@@QAEPAVGoPlacement@@XZ");
+                uint32_t pos = ext_thiscall(c, FX("?GetPosition@GoPlacement@@QBEABUSiegePos@@XZ"), pl, 0, 0);
+                ext_thiscall(c, FX("?SetStartingPos@GoCloneReq@@QAEXABUSiegePos@@@Z"), req, 1, &pos);
+                uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+                uint32_t bear = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+                scratch_end(c, esp);
+                uint32_t rules = w32_callback(c, FX("?FUBI_GetClassSingleton@Rules@@CAPAV1@XZ"), 0, 0);
+                for (int k = 0; k < 20 && bear; k++) { uint32_t d[6] = {GO_GOID(m[0]), bear, 0, fbits(1.0f), 0, 0}; ext_thiscall(c, FX("?DamageGo@Rules@@QAE_NPBUGoid_@@00M_N1@Z"), rules, 6, d); }
+                fprintf(stderr, "loa: test bear %08x hit the hero 20 times\n", bear);
+            }
             RET(1, 0);
         }
         phase++;
