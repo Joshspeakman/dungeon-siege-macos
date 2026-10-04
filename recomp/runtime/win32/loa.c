@@ -19,14 +19,37 @@ static void modifiers_dirty(Ctx *c, uint32_t go) { uint32_t a = 1; if (go) ext_t
 /* base-engine exports by decorated name, resolved once per call site */
 #define FX(name) ({ static uint32_t _a; if (!_a) _a = ext_export(name); _a; })
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+#define GPSTR_CTOR 0x42aea8u                             /* gpstring::gpstring() */
+static uint32_t gstr(const char *s);
+static uint32_t gpstr(Ctx *c, const char *text);
 static float bitsf(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 /* scratch memory on the guest stack for out-parameters (released by scratch_end) */
 static uint32_t scratch(Ctx *c, uint32_t n) { c->esp -= (n + 15) & ~15u; return c->esp; }
 static void scratch_end(Ctx *c, uint32_t esp) { c->esp = esp; }
 static uint32_t goid_go(Ctx *c, uint32_t goid) { return goid ? ext_thiscall(c, FX("?GetGo@Goid_@@ABEPAVGo@@XZ"), goid, 0, 0) : 0; }
-static uint32_t go_comp(Ctx *c, uint32_t go, const char *getter) { return go ? ext_thiscall(c, ext_export(getter), go, 0, 0) : 0; }
+/* the nodes of an MSVC std::map in order (map: allocator, then the head node pointer; nodes {left, parent, right, key,
+ * value}; leaves point at a shared nil node, the first node's left) */
+static int map_nodes(uint32_t map, uint32_t *node, int max)
+{
+    uint32_t head = rt_r32(G_MEM, map + 4), n = head ? rt_r32(G_MEM, head) : 0, m = 0;   /* head->left: the first node */
+    if (!head || n == head) return 0;
+    uint32_t nil = rt_r32(G_MEM, n);                                               /* the first node's left is nil */
+    while (n != head && m < (uint32_t)max) {
+        node[m++] = n;
+        uint32_t r = rt_r32(G_MEM, n + 8);
+        if (r != nil) { n = r; for (int g = 0; g < 64 && rt_r32(G_MEM, n) != nil; g++) n = rt_r32(G_MEM, n); }
+        else {
+            uint32_t p = rt_r32(G_MEM, n + 4); int g = 0;
+            while (n == rt_r32(G_MEM, p + 8) && g++ < 64) { n = p; p = rt_r32(G_MEM, p + 4); }
+            if (rt_r32(G_MEM, n + 8) != p) n = p;
+        }
+    }
+    return (int)m;
+}
+#define go_comp(c, go, getter) ({ uint32_t _go = (go); _go ? ext_thiscall(c, FX(getter), _go, 0, 0) : 0; })   /* a component (getter: literal) */
 #define GO_ASPECT(go)    go_comp(c, go, "?GetAspect@Go@@QAEPAVGoAspect@@XZ")
 #define GO_MIND(go)      go_comp(c, go, "?GetMind@Go@@QAEPAVGoMind@@XZ")
+#define GO_BODY(go)      go_comp(c, go, "?GetBody@Go@@QAEPAVGoBody@@XZ")
 #define GO_ACTOR(go)     go_comp(c, go, "?GetActor@Go@@QAEPAVGoActor@@XZ")
 #define GO_MAGIC(go)     go_comp(c, go, "?GetMagic@Go@@QAEPAVGoMagic@@XZ")
 #define GO_COMMON(go)    go_comp(c, go, "?GetCommon@Go@@QAEPAVGoCommon@@XZ")
@@ -35,7 +58,8 @@ static uint32_t go_comp(Ctx *c, uint32_t go, const char *getter) { return go ? e
 /* per-object state the base engine has no field for, keyed by object address or Goid */
 typedef struct { uint32_t key, kind; uint32_t v; } Side;
 static Side side[16384]; static pthread_mutex_t side_lock = PTHREAD_MUTEX_INITIALIZER;
-enum { S_ALLOW_MOVE = 1, S_LODFI, S_PCONTENT_INV, S_DAMAGE_TAKER, S_SPELLBOOK, S_IS_SET_ITEM, S_SET_COUNT, S_REAL_MINUTES, S_COPY_INV };
+enum { S_ALLOW_MOVE = 1, S_LODFI, S_PCONTENT_INV, S_DAMAGE_TAKER, S_SPELLBOOK, S_IS_SET_ITEM, S_SET_COUNT, S_REAL_MINUTES, S_COPY_INV,
+       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT };
 static uint32_t side_get(uint32_t key, uint32_t kind, uint32_t dflt)
 {
     pthread_mutex_lock(&side_lock); uint32_t h = (key * 2654435761u ^ kind * 40503u) & 16383, r = dflt;
@@ -312,9 +336,127 @@ static uint32_t singleton(uint32_t *g) { if (!*g) *g = heap_alloc(w32_process_he
 static uint32_t g_transform, g_overhead, g_empty_string;
 static void TransformationManager_Singleton(Ctx *c) { RETC(singleton(&g_transform)); }
 static void OverheadMap_Singleton(Ctx *c) { RETC(singleton(&g_overhead)); }
-static void TransformationManager_STransformMe(Ctx *c) { RET(0, 3); }
-static void TransformationManager_SUnTransformMe(Ctx *c) { RET(0, 1); }
-static void TransformationManager_GetNewTemplateName(Ctx *c) { RET(singleton(&g_empty_string), 1); }   /* an empty string */
+/* ---- transformation: the expansion's Transform spells (and its doppelgangers) turn a character into a creature for a
+ * while. The base engine can already show a Go with another model than its template's: GoAspect holds the shown
+ * ("current") nema aspect at +0x34 (its pointer cached at +0x38) and keeps the template's own at +0x3c while another is
+ * shown (body armour is worn this way). The creature's model becomes the current aspect and the body takes the
+ * creature's animations (the chore dictionary and bone translator of the creature template's [body]); the character's
+ * own aspect, animations and scale come back when it ends. The spell's enchantments give the creature's strength. */
+#define CONTENTDB            rt_r32(G_MEM, 0x7a05c4u)
+#define ASPECT_STORAGE       rt_r32(G_MEM, 0x7a0664u)   /* nema aspect handles: load, release */
+#define ASPECT_OBJECTS       rt_r32(G_MEM, 0x7a05dcu)   /* handle -> nema::Aspect* */
+#define NAMING_KEY           rt_r32(G_MEM, 0x7a0464u)   /* model name -> file */
+#define TEMPLATE_FIND        0x5252edu   /* ContentDb: GoDataTemplate* by name, loaded (templates load on first use; kept) */
+#define TEMPLATE_COMPONENT   0x5f8ea9u   /* GoDataTemplate::FindComponentByName(const char*) -> GoDataComponent* */
+#define NAMING_RESOLVE       0x6388aeu   /* bool (const char* name, gpstring& file) */
+#define ASPECT_LOAD          0x68d0e0u   /* handle& (handle& out, const char* file, const char* name) */
+#define ASPECT_RELEASE       0x68cff5u   /* (handle, bool) */
+#define ASPECT_PTR           0x47abebu   /* nema::Aspect* (handle) */
+#define ASPECT_TAKE_OVER     0x68ff99u   /* new->(old aspect, visible): placement and state of the one it replaces */
+#define ASPECT_TEXTURE       0x532008u   /* GoAspect: (slot, const char* texture or 0 for the model's own) */
+#define BODY_LOAD_CHORES     0x5ba227u   /* GoBody: (re)load its animations from its [body] data onto the current aspect */
+#define UISHELL (rt_r32(G_MEM, 0x7a065cu))
+static void ui_expansion_fixups(Ctx *c);
+static uint32_t sstr(Ctx *c, const char *s) { uint32_t n = (uint32_t)strlen(s) + 1, g = scratch(c, n); memcpy(GP(g), s, n); return g; }
+static uint32_t template_data(Ctx *c, const char *tmpl, const char *component)
+{
+    uint32_t esp = c->esp, t = sstr(c, tmpl), r = CONTENTDB ? ext_thiscall(c, TEMPLATE_FIND, CONTENTDB, 1, &t) : 0;
+    if (r) { uint32_t n = sstr(c, component); r = ext_thiscall(c, TEMPLATE_COMPONENT, r, 1, &n); }
+    scratch_end(c, esp); return r;
+}
+static int template_string(Ctx *c, const char *path, char *out, size_t cap)   /* "template:component:field" */
+{
+    uint32_t esp = c->esp, p = sstr(c, path);
+    uint32_t g = ext_thiscall(c, FX("?GetTemplateString@ContentDb@@QAEABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@PBD@Z"), CONTENTDB, 1, &p);
+    uint32_t t = g ? rt_r32(G_MEM, g) : 0; snprintf(out, cap, "%s", t ? GS(t) : ""); scratch_end(c, esp); return *out != 0;
+}
+static float template_float(Ctx *c, const char *path, float dflt)
+{
+    uint32_t esp = c->esp, a[2] = {sstr(c, path), fbits(dflt)};
+    float v = (float)ext_thiscall_f(c, FX("?GetTemplateFloat@ContentDb@@QAEMPBDM@Z"), CONTENTDB, 2, a); scratch_end(c, esp); return v;
+}
+static void aspect_show(Ctx *c, uint32_t go, uint32_t aspect, uint32_t h)     /* make h the shown aspect */
+{
+    uint32_t np = ext_thiscall(c, ASPECT_PTR, ASPECT_OBJECTS, 1, &h), old = rt_r32(G_MEM, aspect + 0x38);
+    uint32_t vis = ext_thiscall(c, FX("?IsInAnyScreenWorldFrustum@Go@@QBE_NXZ"), go, 0, 0) & 0xff;
+    if (np && old) { uint32_t a[2] = {old, vis}; ext_thiscall(c, ASPECT_TAKE_OVER, np, 2, a); }
+    rt_w32(G_MEM, aspect + 0x34, h); rt_w32(G_MEM, aspect + 0x38, np);
+    if (np) rt_w32(G_MEM, np + 0x10, GO_GOID(go));
+}
+static void body_chores(Ctx *c, uint32_t body, uint32_t data)               /* animations from a [body] (0: its own) */
+{
+    uint32_t own = rt_r32(G_MEM, body + 8), no = 0;
+    if (data) rt_w32(G_MEM, body + 8, data);
+    ext_thiscall(c, BODY_LOAD_CHORES, body, 1, &no);
+    rt_w32(G_MEM, body + 8, own);
+}
+static int transform_go(Ctx *c, uint32_t go, const char *tmpl)
+{
+    uint32_t aspect = GO_ASPECT(go), body = GO_BODY(go);
+    if (!tmpl || !*tmpl || !aspect || !body || side_get(go, S_TRANSFORM, 0)) return 0;
+    char path[256], model[128], file[512] = ""; snprintf(path, sizeof path, "%s:aspect:model", tmpl);
+    uint32_t data = template_data(c, tmpl, "body");
+    int got = template_string(c, path, model, sizeof model);
+    if (!data || !got) { fprintf(stderr, "loa: cannot transform into '%s' (body %08x, model '%s')\n", tmpl, data, model); return 0; }
+    uint32_t esp = c->esp, g = scratch(c, 16), out = g + 8;
+    ext_thiscall(c, GPSTR_CTOR, g, 0, 0);
+    uint32_t a[3] = {sstr(c, model), g};
+    if (ext_thiscall(c, NAMING_RESOLVE, NAMING_KEY, 2, a) & 0xff) { uint32_t t = rt_r32(G_MEM, g); snprintf(file, sizeof file, "%s", t ? GS(t) : ""); }
+    uint32_t h = 0;
+    if (*file) { uint32_t b[3] = {out, sstr(c, file), sstr(c, model)}; h = rt_r32(G_MEM, ext_thiscall(c, ASPECT_LOAD, ASPECT_STORAGE, 3, b)); }
+    ext_thiscall(c, 0x48899au, g, 0, 0);                                     /* ~gpstring */
+    scratch_end(c, esp);
+    if (!h) { fprintf(stderr, "loa: no model %s for '%s'\n", model, tmpl); return 0; }
+    side_set(go, S_OWN_ASPECT, rt_r32(G_MEM, aspect + 0x34));                 /* kept (with its reference) until the end */
+    side_set(go, S_OWN_SCALE, rt_r32(G_MEM, aspect + 0x18));
+    aspect_show(c, go, aspect, h);
+    uint32_t np = rt_r32(G_MEM, aspect + 0x38), shared = np ? rt_r32(G_MEM, np) : 0, nt = shared ? rt_r32(G_MEM, shared + 0x3c) : 1;
+    for (uint32_t i = 0; i < nt && i < 16; i++) { uint32_t a2[2] = {i, 0}; ext_thiscall(c, ASPECT_TEXTURE, aspect, 2, a2); }   /* its own skins */
+    body_chores(c, body, data);
+    snprintf(path, sizeof path, "%s:aspect:scale_base", tmpl);
+    rt_wf32(G_MEM, aspect + 0x18, template_float(c, path, 1.0f));
+    side_set(go, S_TRANSFORM, gstr(tmpl)); side_set(go, S_CREATURE_ASPECT, h);
+    if (UISHELL) ui_expansion_fixups(c);
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: %08x transformed into %s (model %s)\n", go, tmpl, model);
+    return 1;
+}
+static int untransform_go(Ctx *c, uint32_t go)
+{
+    uint32_t aspect = GO_ASPECT(go), body = GO_BODY(go), t = side_get(go, S_TRANSFORM, 0), own = side_get(go, S_OWN_ASPECT, 0);
+    if (!t || !aspect || !body) return 0;
+    uint32_t h = rt_r32(G_MEM, aspect + 0x34);
+    if (h == side_get(go, S_CREATURE_ASPECT, 0)) {
+        aspect_show(c, go, aspect, own);
+        uint32_t r[2] = {h, 1}; ext_thiscall(c, ASPECT_RELEASE, ASPECT_STORAGE, 2, r);
+    } else {                     /* the engine changed the model meanwhile (armour put on): it released the creature's */
+        uint32_t r[2] = {own, 1}; ext_thiscall(c, ASPECT_RELEASE, ASPECT_STORAGE, 2, r);
+        fprintf(stderr, "loa: %08x changed its model while transformed\n", go);
+    }
+    body_chores(c, body, 0);
+    rt_w32(G_MEM, aspect + 0x18, side_get(go, S_OWN_SCALE, rt_r32(G_MEM, aspect + 0x18)));
+    side_set(go, S_TRANSFORM, 0); side_set(go, S_OWN_ASPECT, 0); side_set(go, S_CREATURE_ASPECT, 0);
+    if (UISHELL) ui_expansion_fixups(c);
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: %08x back from %s\n", go, GS(t));
+    return 1;
+}
+/* transformed: by a spell this session (the side table is per object, so it is checked against the actor's state) */
+static int is_transformed(Ctx *c, uint32_t go)
+{
+    if (!go || !side_get(go, S_TRANSFORM, 0)) return 0;
+    if (getenv("DS_LOA_TRANSFORMTEST")) return 1;
+    uint32_t actor = GO_ACTOR(go); static uint32_t name; if (!name) name = gstr("transformed");
+    return actor && (ext_thiscall(c, FX("?HasGenericState@GoActor@@QBE_NPBD@Z"), actor, 1, &name) & 0xff);
+}
+static void TransformationManager_STransformMe(Ctx *c)          /* (Go*, gpstring& creature template, gpstring& spell) */
+{
+    uint32_t t = rt_r32(G_MEM, ARG(1)); transform_go(c, ARG(0), t ? GS(t) : ""); RET(0, 3);
+}
+static void TransformationManager_SUnTransformMe(Ctx *c) { untransform_go(c, ARG(0)); RET(0, 1); }
+static void TransformationManager_GetNewTemplateName(Ctx *c)   /* the creature a Go is transformed into, or "" */
+{
+    uint32_t t = side_get(ARG(0), S_TRANSFORM, 0);
+    RET(t ? gpstr(c, GS(t)) : singleton(&g_empty_string), 1);
+}
 static void Player_GetParty(Ctx *c)
 {
     uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
@@ -423,27 +565,29 @@ static uint32_t s_jat_approach, s_jat_none, s_qt_underattack;
 /* ---- interface: the expansion's screens have parts the base engine does not manage (pack-animal inventories, the
  * transformed-hero portrait overlay); after the engine shows an interface or a group they are put back as the
  * expansion's engine would have them: hidden unless their feature is in use ---- */
-#define UISHELL (rt_r32(G_MEM, 0x7a065cu))
 #define UI_FIND_WINDOW 0x6e06d3u      /* UIWindow* UIShell::FindUIWindow(const char* name, const char* interface) */
 static int ui_wrapping;
-static void ui_hide_window(Ctx *c, const char *name)
+static void ui_show_window(Ctx *c, const char *name, int show)
 {
     uint32_t esp = c->esp, n = scratch(c, 64); snprintf((char *)GP(n), 64, "%s", name);
     uint32_t a[2] = {n, 0}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, a);
-    if (w && G_MEM[w + 0x108]) { uint32_t off = 0; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, w) + 0x48), w, 1, &off); }   /* SetVisible(false) */
+    if (w && !G_MEM[w + 0x108] != !show) { uint32_t v = !!show; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, w) + 0x48), w, 1, &v); }   /* SetVisible */
     scratch_end(c, esp);
 }
+#define ui_hide_window(c, name) ui_show_window(c, name, 0)
 static void ui_hide_group(Ctx *c, const char *group)
 {
     uint32_t esp = c->esp, n = scratch(c, 64); snprintf((char *)GP(n), 64, "%s", group);
     uint32_t a[4] = {n, 0, 0, 0}; ext_thiscall(c, 0x6dee75u, UISHELL, 4, a);
     scratch_end(c, esp);
 }
+static int is_transformed(Ctx *c, uint32_t go);
+static int party_members(Ctx *c, uint32_t *out, int max);
 static void ui_expansion_fixups(Ctx *c)
 {
-    char n[64];
-    for (int i = 1; i <= 8; i++) {
-        snprintf(n, sizeof n, "awp_transformed_portrait_%d", i); ui_hide_window(c, n);
+    char n[64]; uint32_t m[16]; int np = party_members(c, m, 16);
+    for (int i = 1; i <= 8; i++) {   /* the "transformed" mark on the portraits of transformed party members */
+        snprintf(n, sizeof n, "awp_transformed_portrait_%d", i); ui_show_window(c, n, i <= np && is_transformed(c, m[i - 1]));
         snprintf(n, sizeof n, "multi_inventory_dsx_pack_animal_%d", i); ui_hide_group(c, n);
     }
     ui_hide_group(c, "dsx_pack_animal_inventory");
@@ -464,7 +608,17 @@ static void world_map_open(Ctx *c);
 static void world_map_close(Ctx *c);
 static int end_party_spells(Ctx *c, int transforms);
 static void publish_keys(Ctx *c, uint32_t uigame);
+static int override_impl(Ctx *c, uint32_t addr);
+/* an override either performs the whole call or returns 0 to let the original run; calls made while deciding (into the
+ * game) clobber the registers the original expects at its entry, so they are put back */
 int loa_override(Ctx *c, uint32_t addr)
+{
+    uint32_t eax = c->eax, ecx = c->ecx, edx = c->edx, ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    if (override_impl(c, addr)) return 1;
+    c->eax = eax; c->ecx = ecx; c->edx = edx; c->ebx = ebx; c->esi = esi; c->edi = edi; c->ebp = ebp;
+    return 0;
+}
+static int override_impl(Ctx *c, uint32_t addr)
 {
     switch (addr) {
     case 0x5abf1e: {                                  /* Rules::ChangeLife(Goid, float delta, DWORD): damage transference */
@@ -475,8 +629,10 @@ int loa_override(Ctx *c, uint32_t addr)
         c->esp += 4 + 12; return 1;
     }
     case 0x5d281f: {                                  /* Job* GoMind::SDoJob(const JobReq&): frozen minds take no movement jobs */
-        if (side_get(c->ecx, S_ALLOW_MOVE, 1)) return 0;
         uint32_t jat = rt_r32(G_MEM, ARG(0));         /* JobReq::m_Jat */
+        static uint32_t jat_get, jat_talk; if (!jat_get) { fubi_enum(c, "eJobAbstractType", "jat_get", &jat_get); fubi_enum(c, "eJobAbstractType", "jat_talk", &jat_talk); }
+        if ((jat == jat_get || jat == jat_talk) && is_transformed(c, COMP_GO(c->ecx))) { c->eax = 0; c->esp += 8; return 1; }   /* a creature can neither pick up nor talk */
+        if (side_get(c->ecx, S_ALLOW_MOVE, 1)) return 0;
         if (jat != 25 && jat != 19 && jat != 26 && jat != 18 && jat != JAT_APPROACH) return 0;   /* move, follow, patrol, flee, approach */
         c->eax = 0; c->esp += 8; return 1;
     }
@@ -494,6 +650,16 @@ int loa_override(Ctx *c, uint32_t addr)
         static int inside; if (inside) return 0;
         inside = 1; ext_thiscall(c, addr, c->ecx, 0, 0); publish_keys(c, c->ecx); inside = 0;
         c->esp += 4; return 1;
+    }
+    case 0x533eb3: {                                  /* GoAspect::Xfer (saving, cloning): a transformed character as itself */
+        static int inside; uint32_t a = c->ecx, go = COMP_GO(a);
+        if (inside || !is_transformed(c, go)) return 0;
+        uint32_t cur = rt_r32(G_MEM, a + 0x34), ptr = rt_r32(G_MEM, a + 0x38), scale = rt_r32(G_MEM, a + 0x18), own = side_get(go, S_OWN_ASPECT, 0);
+        rt_w32(G_MEM, a + 0x34, own); rt_w32(G_MEM, a + 0x38, ext_thiscall(c, ASPECT_PTR, ASPECT_OBJECTS, 1, &own));
+        rt_w32(G_MEM, a + 0x18, side_get(go, S_OWN_SCALE, scale));
+        uint32_t arg = ARG(0); inside = 1; ext_thiscall(c, addr, a, 1, &arg); inside = 0;
+        rt_w32(G_MEM, a + 0x34, cur); rt_w32(G_MEM, a + 0x38, ptr); rt_w32(G_MEM, a + 0x18, scale);
+        c->esp += 8; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
@@ -561,7 +727,6 @@ void loa_hook(Ctx *c, uint32_t addr)
 /* ---- the overhead world map (Legends of Aranna): the map's info/overheadmap.gas lists the pieces of the world
  * image revealed as the party explores (256x256 textures at x,y on a 1024x768 map) and the named area markers. Which
  * pieces are revealed and which marker is current are kept in the game's quest database (saved with the game). ---- */
-#define GPSTR_CTOR 0x42aea8u
 static uint32_t gpstr(Ctx *c, const char *text)          /* a heap gpstring with the given text (kept) */
 {
     uint32_t g = heap_alloc(w32_process_heap, 8, 16); ext_thiscall(c, GPSTR_CTOR, g, 0, 0);
@@ -724,23 +889,7 @@ static int party_members(Ctx *c, uint32_t *out, int max)
     for (int i = 0; i < n && m < max; i++) { uint32_t k = (uint32_t)i, g = ext_thiscall(c, FX("?Get@GopColl@@ABEPAVGo@@H@Z"), kids, 1, &k); if (g) out[m++] = g; }
     return m;
 }
-static int generic_states(uint32_t actor, uint32_t *node, int max)   /* the actor's state nodes, in order */
-{
-    uint32_t head = rt_r32(G_MEM, actor + 0x4c), n = rt_r32(G_MEM, head), m = 0;   /* head->left: the first node */
-    if (!head || n == head) return 0;
-    uint32_t nil = rt_r32(G_MEM, n);                                               /* the first node's left is nil */
-    while (n != head && m < (uint32_t)max) {
-        node[m++] = n;
-        uint32_t r = rt_r32(G_MEM, n + 8);
-        if (r != nil) { n = r; for (int g = 0; g < 64 && rt_r32(G_MEM, n) != nil; g++) n = rt_r32(G_MEM, n); }
-        else {
-            uint32_t p = rt_r32(G_MEM, n + 4); int g = 0;
-            while (n == rt_r32(G_MEM, p + 8) && g++ < 64) { n = p; p = rt_r32(G_MEM, p + 4); }
-            if (rt_r32(G_MEM, n + 8) != p) n = p;
-        }
-    }
-    return (int)m;
-}
+static int generic_states(uint32_t actor, uint32_t *node, int max) { return map_nodes(actor + 0x48, node, max); }
 #define STATE_NAME(node)  rt_r32(G_MEM, (node) + 0xc)
 #define STATE_SPELL(node) rt_r32(G_MEM, (node) + 0x20)
 static int end_party_spells(Ctx *c, int transforms)
@@ -755,7 +904,10 @@ static int end_party_spells(Ctx *c, int transforms)
             uint32_t nm = STATE_NAME(node[j]), spell = STATE_SPELL(node[j]), sg = goid_go(c, spell); int hit = 0;
             if (!sg) continue;
             if (transforms) hit = nm && !strcasecmp(GS(nm), "transformed");
-            else for (int q = 0; q < 4 && !hit; q++) { uint32_t cn = gstr(summon[q]); hit = ext_thiscall(c, FX("?HasComponent@Go@@QBE_NPBD@Z"), sg, 1, &cn) & 0xff; }
+            else for (int q = 0; q < 4 && !hit; q++) {
+                static uint32_t cn[4]; if (!cn[q]) cn[q] = gstr(summon[q]);
+                hit = ext_thiscall(c, FX("?HasComponent@Go@@QBE_NPBD@Z"), sg, 1, &cn[q]) & 0xff;
+            }
             if (!hit) continue;
             uint32_t a[5] = {we_deactivate, GO_GOID(member[i]), spell, GO_GOID(member[i]), 0};
             w32_callback(c, fn_post_data, 5, a); done++;
@@ -770,7 +922,26 @@ static int world_map_visible(Ctx *c) { uint32_t n = gpstr(c, "world_map"); retur
 static void key_toggle_world_map(Ctx *c) { if (world_map_visible(c)) world_map_close(c); else world_map_open(c); RET(1, 0); }
 static void key_redistribute_potions(Ctx *c) { redistribute_potions(c, 0); RET(1, 0); }
 static void key_unsummon(Ctx *c) { end_party_spells(c, 0); RET(1, 0); }
-static void key_untransform(Ctx *c) { end_party_spells(c, 1); RET(1, 0); }
+static void key_untransform(Ctx *c)
+{
+    const char *test = getenv("DS_LOA_TRANSFORMTEST");      /* development: Y turns the first party member into <template> and back */
+    const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
+    uint32_t m[16];
+    if (test && party_members(c, m, 16)) { if (!untransform_go(c, m[0])) transform_go(c, m[0], test); }
+    else if (spell && party_members(c, m, 16) && is_transformed(c, m[0])) end_party_spells(c, 1);
+    else if (spell && party_members(c, m, 16)) {
+        static uint32_t we_cast; if (!we_cast) fubi_enum(c, "eWorldEvent", getenv("DS_LOA_SPELLEVENT") ? getenv("DS_LOA_SPELLEVENT") : "we_req_cast", &we_cast);
+        uint32_t esp = c->esp, hero = GO_GOID(m[0]), a[2] = {hero, sstr(c, spell)};
+        uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBUGoid_@@PBD@Z"), 2, a);
+        uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+        uint32_t sp = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+        scratch_end(c, esp);
+        uint32_t p[5] = {we_cast, hero, sp, hero, 0}; w32_callback(c, fn_post_data, 5, p);
+        fprintf(stderr, "loa: test cast of %s (spell %08x) by %08x\n", spell, sp, hero);
+    }
+    else end_party_spells(c, 1);
+    RET(1, 0);
+}
 static void publish_keys(Ctx *c, uint32_t uigame)
 {
     static const struct { const char *name; void (*fn)(Ctx *); } keys[] = {
