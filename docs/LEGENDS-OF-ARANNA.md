@@ -33,7 +33,7 @@ Dungeon Siege game folder is not changed. This works on its own or together with
 
 In the launch window, set **Game** to **Legends of Aranna** (or **Aranna Multiplayer**) and press Play. The expansion
 keeps its own settings, characters and saves, in
-`~/Games/DungeonSiegeNative/drive_c/Users/player/Documents/Legends of Aranna`, separate from the Kingdom of Ehb.
+`~/Games/DungeonSiegeNative/drive_c/Users/player/Documents/Dungeon Siege LOA` (the same folder name as the original, so saves can be copied to and from a Windows installation), separate from the Kingdom of Ehb.
 
 The expansion's new keys work as in the original (its default bindings come from its own data):
 

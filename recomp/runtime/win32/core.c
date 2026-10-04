@@ -468,12 +468,7 @@ IMPL(shfolder, SHGetFolderPathA)
 {
     uint32_t csidl = ARG(1) & 0xff, create = ARG(1) & 0x8000, out = ARG(4); const char *p;
     switch (csidl) {
-    case 0x05: {                                                              /* CSIDL_PERSONAL */
-        extern char w32_game_layer[1024];   /* Legends of Aranna keeps its own saves and characters, as the original did */
-        if (*w32_game_layer) { p = "C:\\Users\\player\\Documents\\Legends of Aranna"; create = 1; }   /* the game only adds the last level */
-        else p = "C:\\Users\\player\\Documents";
-        break;
-    }
+    case 0x05: p = "C:\\Users\\player\\Documents"; break;                    /* CSIDL_PERSONAL */
     case 0x1a: p = "C:\\Users\\player\\AppData\\Roaming"; break;           /* CSIDL_APPDATA */
     case 0x1c: p = "C:\\Users\\player\\AppData\\Local"; break;             /* CSIDL_LOCAL_APPDATA */
     case 0x23: p = "C:\\ProgramData"; break;                                  /* CSIDL_COMMON_APPDATA */

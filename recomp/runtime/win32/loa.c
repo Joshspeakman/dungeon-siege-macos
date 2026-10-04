@@ -775,7 +775,7 @@ static void publish_keys(Ctx *c, uint32_t uigame);
 static const char *opt_path(void)
 {
     static char host[2048];
-    if (!*host && w32_host_path("C:\\Users\\player\\Documents\\Legends of Aranna\\Dungeon Siege\\loa_options.txt", host, sizeof host, 1)) *host = 0;
+    if (!*host && w32_host_path("C:\\Users\\player\\Documents\\Dungeon Siege LOA\\loa_options.txt", host, sizeof host, 1)) *host = 0;
     return host;
 }
 static void opt_load(void)
