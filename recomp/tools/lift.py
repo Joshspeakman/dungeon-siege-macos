@@ -38,6 +38,8 @@ OVERRIDES = {
     0x005cfa33: 'job type flag mask',
     0x0051f739: 'ToString(eQueryTrait)',
     0x005e179b: 'AIQuery::Is(Go const*, Go const*, eQueryTrait)',
+    0x006dec5c: 'UIShell::ShowInterface(const gpstring&)',
+    0x006dee75: 'UIShell::ShowGroup(const char*, bool, bool, const char*)',
 }
 
 class Unsupported(Exception): pass

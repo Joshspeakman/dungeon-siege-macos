@@ -313,9 +313,51 @@ static uint32_t gstr(const char *s) { uint32_t g = heap_alloc(w32_process_heap, 
 static uint32_t s_jat_approach, s_jat_none, s_qt_underattack;
 #define QT_UNDERATTACK 49u            /* the expansion's query trait: someone is fighting the object */
 
+/* ---- interface: the expansion's screens have parts the base engine does not manage (pack-animal inventories, the
+ * transformed-hero portrait overlay); after the engine shows an interface or a group they are put back as the
+ * expansion's engine would have them: hidden unless their feature is in use ---- */
+#define UISHELL (rt_r32(G_MEM, 0x7a065cu))
+#define UI_FIND_WINDOW 0x6e06d3u      /* UIWindow* UIShell::FindUIWindow(const char* name, const char* interface) */
+static int ui_wrapping;
+static void ui_hide_window(Ctx *c, const char *name)
+{
+    uint32_t esp = c->esp, n = scratch(c, 64); snprintf((char *)GP(n), 64, "%s", name);
+    uint32_t a[2] = {n, 0}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, a);
+    if (w && G_MEM[w + 0x108]) { uint32_t off = 0; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, w) + 0x48), w, 1, &off); }   /* SetVisible(false) */
+    scratch_end(c, esp);
+}
+static void ui_hide_group(Ctx *c, const char *group)
+{
+    uint32_t esp = c->esp, n = scratch(c, 64); snprintf((char *)GP(n), 64, "%s", group);
+    uint32_t a[4] = {n, 0, 0, 0}; ext_thiscall(c, 0x6dee75u, UISHELL, 4, a);
+    scratch_end(c, esp);
+}
+static void ui_expansion_fixups(Ctx *c)
+{
+    char n[64];
+    for (int i = 1; i <= 8; i++) {
+        snprintf(n, sizeof n, "awp_transformed_portrait_%d", i); ui_hide_window(c, n);
+        snprintf(n, sizeof n, "multi_inventory_dsx_pack_animal_%d", i); ui_hide_group(c, n);
+    }
+    ui_hide_group(c, "dsx_pack_animal_inventory");
+}
+/* run the original function (the override steps aside while it runs), then the fix-ups; nargs: its stack arguments */
+static int ui_wrap(Ctx *c, uint32_t fn, int nargs)
+{
+    if (ui_wrapping || !UISHELL) return 0;
+    ui_wrapping = 1;
+    uint32_t a[4]; for (int i = 0; i < nargs; i++) a[i] = ARG(i);
+    ext_thiscall(c, fn, c->ecx, nargs, a);
+    ui_expansion_fixups(c);
+    ui_wrapping = 0;
+    c->esp += 4 + 4 * (uint32_t)nargs; return 1;
+}
+
 int loa_override(Ctx *c, uint32_t addr)
 {
     switch (addr) {
+    case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
+    case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */
         if (ARG(0) != JAT_APPROACH) return 0;
         c->eax = s_jat_approach; c->esp += 4; return 1;
