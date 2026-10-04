@@ -19,7 +19,7 @@ recomp/build.sh "/path/to/Dungeon Siege/DungeonSiege.exe"     # -> recomp/work/f
 | DirectDraw/Direct3D 7 (`runtime/win32/ddraw.c`) + Metal renderer (`../src/renderer`) + macOS host (`host/main.m`) | working |
 | Miles Sound System: the game's own `Mss32.dll` 6.1c and the providers it loads (`system/mss/Mssfast.m3d`, `Mp3dec.asi`), recompiled from the user's game folder like the executable, on DirectSound/WINMM implemented over Core Audio (`runtime/win32/dsound.c`, `winmm.c`) | working; output verified against an independent decode (below) |
 | Hand-written Miles replacement (`runtime/win32/miles.c`), kept as a fallback: `W32_MILES=native` | working |
-| Bink video | not needed: the GOG release ships no videos and never calls Bink (stubs kept) |
+| Bink video | the game's own BinkW32.dll, recompiled like Miles (movies are inside Objects.dsres; the expansion's in Expansion.dsres); its sound goes through Miles; frames copied to the primary surface are presented |
 | Structured exception handling incl. `__except` blocks (landing pads in the 39 functions that use them) | working |
 | App bundle + installer (`../install.sh`), launch window (`host/launcher.m`) | working |
 | DirectPlay 8 client/server and TCP/IP provider (`runtime/win32/dpnet.c`, `dp8proto.c`), from Microsoft's protocol specifications; WSOCK32 host name and addresses | working between copies of the app; not yet tested against Windows (`../docs/MULTIPLAYER.md`) |

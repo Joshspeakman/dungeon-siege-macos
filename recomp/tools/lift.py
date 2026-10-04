@@ -310,12 +310,18 @@ class Lifter:
         rep = None
         for pfx in ('rep ', 'repe ', 'repne ', 'lock '):
             if mn.startswith(pfx): rep = pfx.strip(); mn = mn[len(pfx):]
+        if rep == 'lock' and getattr(self, 'nolock', False): rep = None
         if i.opcode[0] in range(0xd8, 0xe0) or mn.startswith('f') and mn not in ('fs',):
             return self.x87(i)
         if mn == 'wait': return ';'                              # fwait: x87 exceptions are masked
         if mn == 'int3': return 'SPILL; rt_exception(c, 0x%08xu, 0x80000003u); RELOAD;' % i.address          # EXCEPTION_BREAKPOINT
         if mn == 'int': return 'SPILL; rt_exception(c, 0x%08xu, 0xc0000005u); RELOAD;' % i.address            # general protection
         if mn in JUNK: raise Unsupported(mn)
+        if rep == 'lock' and mn in ('add', 'adc', 'sub', 'sbb', 'and', 'or', 'xor') and ops[0].type == X.X86_OP_MEM:
+            self.nolock = True                                   # the plain instruction, under the runtime's bus lock
+            try: body = self.emit(i, f, insns, callees)
+            finally: self.nolock = False
+            return '{ rt_bus_lock(); %s rt_bus_unlock(); }' % body
         if rep == 'lock': return self.locked(i, mn)
         if mn in ('movsb', 'movsw', 'movsd', 'stosb', 'stosw', 'stosd', 'lodsb', 'lodsw', 'lodsd',
                   'scasb', 'scasw', 'scasd', 'cmpsb', 'cmpsw', 'cmpsd') and not (ops and ops[0].type == X.X86_OP_REG and i.reg_name(ops[0].reg).startswith('xmm')):
@@ -512,10 +518,11 @@ class Lifter:
 
     def locked(self, i, mn):
         o = i.operands
-        if mn in ('inc', 'dec') and o[0].type == X.X86_OP_MEM and o[0].size == 4:
+        if mn in ('inc', 'dec') and o[0].type == X.X86_OP_MEM and o[0].size in (1, 2, 4):
+            sz = o[0].size; t = {1: 'uint8_t', 2: 'uint16_t', 4: 'uint32_t'}[sz]
             fn = '__atomic_add_fetch' if mn == 'inc' else '__atomic_sub_fetch'
-            return '{ uint32_t ea = %s; uint32_t r = %s((uint32_t *)(M + ea), 1u, __ATOMIC_SEQ_CST); f.cin = flag_cf(&f); LF(%s, 2, %s, 1, r); }' % (
-                self.addr(i, o[0]), fn, 'LF_INC' if mn == 'inc' else 'LF_DEC', 'r - 1u' if mn == 'inc' else 'r + 1u')
+            return '{ uint32_t ea = %s; uint32_t r = %s((%s *)(M + ea), (%s)1, __ATOMIC_SEQ_CST); f.cin = flag_cf(&f); LF(%s, %s, (%s & %s), 1, r); }' % (
+                self.addr(i, o[0]), fn, t, t, 'LF_INC' if mn == 'inc' else 'LF_DEC', SZ[sz], 'r - 1u' if mn == 'inc' else 'r + 1u', MASK[sz])
         raise Unsupported('lock ' + mn)
 
     def string(self, mn, rep):

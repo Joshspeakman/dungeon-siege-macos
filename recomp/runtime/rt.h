@@ -201,5 +201,8 @@ uint64_t rt_rdtsc(void);
 void     rt_hook(Ctx *c, uint32_t addr);                   /* lift.py HOOKS: native features (runtime/win32/hooks.c) */
 int      rt_override(Ctx *c, uint32_t addr);               /* lift.py OVERRIDES: nonzero = the call was performed natively */
 void     rt_cpuid(Ctx *c, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
+/* lock-prefixed read-modify-write instructions without an atomic C equivalent: one lock for all of them */
+void     rt_bus_lock(void);
+void     rt_bus_unlock(void);
 void     rt_exception(Ctx *c, uint32_t pc, uint32_t code);   /* raise a CPU exception (SEH); returns if a handler continues */
 #endif

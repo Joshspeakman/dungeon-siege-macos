@@ -76,9 +76,9 @@ Not done yet, or simplified:
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
-The expansion's start-up logos (Microsoft, Gas Powered Games, Mad Doc Software) are Bink movies
-(`movies\ms_intro.bik`, `gpg_intro.bik`, `md_intro.bik`). Copies of the game without those files, such as the GOG
-release and installs that left the movies on the disc, go straight to the main menu, in the original as here.
+The start-up logos (Microsoft, Gas Powered Games, Mad Doc Software) are Bink movies stored inside
+`Expansion.dsres` (`movies/ms_intro.bik`, `gpg_intro.bik`, `md_intro.bik`), played by the game's own Bink library,
+recompiled like the rest; Escape skips each one, as in the original.
 
 Report anything that differs from the original on Windows; the crash and freeze reports in
 `~/Games/DungeonSiegeNative/CrashReports` help.
