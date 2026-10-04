@@ -56,7 +56,9 @@ Not done yet, or simplified:
 - Transformation spells: the character becomes the creature (its model, skins and animations) and changes back when
   the spell ends or with Untransform. A game saved while transformed stores the character in their own form; after
   loading, they stay in their own form until the spell's time runs out.
-- Set items: wearing a full set does not yet give the set bonus.
+- Set items: the bonuses for wearing several pieces of a set apply (and are recounted whenever a piece changes hands),
+  except the expansion-only kinds: "chance to cast a spell when hit" (special defense), spell cost, spell damage and
+  ranged range, about a fifth of them.
 - Backpacks (an item with its own inventory, opened with a right-click) do not open yet.
 - Shops' Sell All: written to the expansion's description (sells everything not equipped; its list offers Sell All,
   and Sell All but Potions / Spells / Unique Spells / Magic Items; spellbooks, gold, backpacks and unsellable items
@@ -68,7 +70,7 @@ Not done yet, or simplified:
   (tested on one Mac); playing together with other players has not been tested yet. In the staging area,
   "Import DS Character..." offers your Dungeon Siege characters and "Import DS LOA Character..." your Legends of
   Aranna ones.
-- Not yet done: set-item bonuses, backpacks, the Voice Overs options' effect, and the "Attack Area" key (Shift).
+- Not yet done: backpacks, the Voice Overs options' effect, and the "Attack Area" key (Shift).
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
