@@ -45,6 +45,7 @@ OVERRIDES = {
     0x004f0b34: 'UIGame GUI callback (const gpstring& message, UIWindow&)',
     0x004e72f3: 'UIGame: publish the in-game key commands to the input binder',
     0x00533eb3: 'GoAspect::Xfer(PersistContext&)',
+    0x004997d7: 'UIGame: the campaign is won (end-of-game dialog)',
 }
 
 class Unsupported(Exception): pass

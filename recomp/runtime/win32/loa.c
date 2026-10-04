@@ -642,6 +642,11 @@ static int override_impl(Ctx *c, uint32_t addr)
         else if (!strcmp(m, "activate_world_map")) world_map_open(c);
         else if (!strcmp(m, "exit_world_map")) world_map_close(c);
         else if (!strcmp(m, "unsummon_creatures")) end_party_spells(c, 0);
+        else if (!strcmp(m, "eg_close")) {            /* closing the end-of-game dialog: ours, then the base game's own handling */
+            uint32_t n = gpstr(c, "dsx_end_game");
+            ext_thiscall(c, FX("?MarkInterfaceForDeactivation@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n);
+            return 0;
+        }
         else if (!strcmp(m, "untransform_characters")) end_party_spells(c, 1);
         else return 0;                                /* the base engine's own commands */
         c->esp += 4 + 8; return 1;
@@ -660,6 +665,16 @@ static int override_impl(Ctx *c, uint32_t addr)
         uint32_t arg = ARG(0); inside = 1; ext_thiscall(c, addr, a, 1, &arg); inside = 0;
         rt_w32(G_MEM, a + 0x34, cur); rt_w32(G_MEM, a + 0x38, ptr); rt_w32(G_MEM, a + 0x18, scale);
         c->esp += 8; return 1;
+    }
+    case 0x4997d7: {                                  /* the campaign is won: the expansion's own end-of-game dialog */
+        uint32_t a[2] = {gpstr(c, "ui:interfaces:backend:dsx_end_game"), 1};
+        ext_thiscall(c, FX("?ActivateInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), UISHELL, 2, a);
+        static uint32_t iface, mp, sp; if (!iface) { iface = gstr("dsx_end_game"); mp = gstr("text_box_eg_mp"); sp = gstr("text_box_eg"); }
+        for (int k = 0; k < 2; k++) {                 /* as the base game: the "continue or start anew" text */
+            uint32_t f[2] = {k ? sp : mp, iface}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f), v = !k;
+            if (w) ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, w) + 0x48), w, 1, &v);
+        }
+        c->esp += 4; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
@@ -926,6 +941,7 @@ static void key_untransform(Ctx *c)
 {
     const char *test = getenv("DS_LOA_TRANSFORMTEST");      /* development: Y turns the first party member into <template> and back */
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
+    if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
     uint32_t m[16];
     if (test && party_members(c, m, 16)) { if (!untransform_go(c, m[0])) transform_go(c, m[0], test); }
     else if (spell && party_members(c, m, 16) && is_transformed(c, m[0])) end_party_spells(c, 1);
