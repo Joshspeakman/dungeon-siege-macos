@@ -57,8 +57,10 @@ Not done yet, or simplified:
   the spell ends or with Untransform. A game saved while transformed stores the character in their own form; after
   loading, they stay in their own form until the spell's time runs out.
 - Set items: wearing a full set does not yet give the set bonus.
-- Backpacks (an item with its own inventory, opened with a right-click) do not open yet, and the shops' auto-sell
-  is not done.
+- Backpacks (an item with its own inventory, opened with a right-click) do not open yet.
+- Shops' Sell All: written to the expansion's description (sells everything not equipped; its list offers Sell All,
+  and Sell All but Potions / Spells / Unique Spells / Magic Items; spellbooks, gold, backpacks and unsellable items
+  are kept) but not yet tried in a shop.
 - Options: the expansion's extra pages work (Enable Selection Rings, Voice Overs, Voice Over Volume) and are
   remembered, but Voice Overs and Voice Over Volume do not yet change how dialogue is played (it plays at the
   Voice Volume).

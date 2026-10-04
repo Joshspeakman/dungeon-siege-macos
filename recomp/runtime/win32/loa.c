@@ -587,11 +587,13 @@ static int party_members(Ctx *c, uint32_t *out, int max);
 static struct { int rings, vo; int vo_volume; int loaded; } opt = {1, 1, 85, 0};   /* the expansion's own options */
 static void opt_load(void);
 static void apply_rings(Ctx *c);
+static void sell_button_text(Ctx *c);
 static void ui_expansion_fixups(Ctx *c)
 {
     char n[64]; uint32_t m[16]; int np = party_members(c, m, 16);
     if (!opt.loaded) opt_load();
     if (!opt.rings) apply_rings(c);
+    sell_button_text(c);
     for (int i = 1; i <= 8; i++) {   /* the "transformed" mark on the portraits of transformed party members */
         snprintf(n, sizeof n, "awp_transformed_portrait_%d", i); ui_show_window(c, n, i <= np && is_transformed(c, m[i - 1]));
         snprintf(n, sizeof n, "multi_inventory_dsx_pack_animal_%d", i); ui_hide_group(c, n);
@@ -724,6 +726,86 @@ static int intro_message(Ctx *c, uint32_t intro, const char *m)
     }
     return 0;
 }
+/* ---- shops: the expansion's Sell All button sells everything in the shopper's inventory that is not equipped; its
+ * list keeps one kind of item. Prices and the transfer are the store's own, as when an item is dragged in. The store
+ * screen's manager holds the store's and the shopper's Goids at +0 and +4. ---- */
+static const char *const sell_options[] = {"Sell All", "Sell All but Potions", "Sell All but Spells", "Sell All but Unique Spells", "Sell All but Magic Items"};
+static int sell_option;
+#define STORE_MANAGER   rt_r32(G_MEM, 0x7a0948u)
+#define STORE_PRICE     0x5dd6b8u    /* GoStore: the price the store pays (Goid item, bool) */
+#define STORE_ADD       0x5db7d0u    /* GoStore::RSAddToStore(Goid item, Goid seller, int price) */
+static int item_list(Ctx *c, uint32_t inv, uint32_t *out, int max)       /* the items in an inventory's grid */
+{
+    static uint32_t il_main; if (!il_main && !fubi_enum(c, "eInventoryLocation", "il_main", &il_main)) return 0;
+    uint32_t coll = ext_thiscall(c, FX("?GetTempGopColl2@AIQuery@@QAEAAUGopColl@@XZ"), w32_callback(c, FX("?FUBI_GetClassSingleton@AIQuery@@CAPAV1@XZ"), 0, 0), 0, 0);
+    ext_thiscall(c, FX("?Clear@GopColl@@AAEXXZ"), coll, 0, 0);
+    uint32_t a[2] = {il_main, coll}; ext_thiscall(c, FX("?ListItems@GoInventory@@QBE_NW4eInventoryLocation@@AAUGopColl@@@Z"), inv, 2, a);
+    int n = (int)ext_thiscall(c, FX("?Size@GopColl@@ABEHXZ"), coll, 0, 0), m = 0;
+    for (int i = 0; i < n && m < max; i++) { uint32_t k = (uint32_t)i, g = ext_thiscall(c, FX("?Get@GopColl@@ABEPAVGo@@H@Z"), coll, 1, &k); if (g) out[m++] = g; }
+    return m;
+}
+static const char *go_template(Ctx *c, uint32_t go) { uint32_t t = ext_thiscall(c, FX("?GetTemplateName@Go@@QBEPBDXZ"), go, 0, 0); return t ? GS(t) : ""; }
+static int is_(Ctx *c, uint32_t go, uint32_t fn) { return (int)(ext_thiscall(c, fn, go, 0, 0) & 0xff); }
+static void auto_sell(Ctx *c)
+{
+    uint32_t mgr = STORE_MANAGER; if (!mgr) return;
+    uint32_t store = goid_go(c, rt_r32(G_MEM, mgr)), shopper = goid_go(c, rt_r32(G_MEM, mgr + 4));
+    uint32_t gostore = store ? rt_r32(G_MEM, store + 0x48) : 0, inv = shopper ? go_comp(c, shopper, "?GetInventory@Go@@QAEPAVGoInventory@@XZ") : 0;
+    if (!gostore || !inv) return;
+    static uint32_t items[512], known[512]; int n = item_list(c, inv, items, 512), nk = 0, sold = 0;
+    if (sell_option == 3)                                  /* the spells already in the shopper's spellbooks */
+        for (int i = 0; i < n; i++) if (is_(c, items[i], FX("?IsSpellBook@Go@@QBE_NXZ"))) {
+            uint32_t bi = go_comp(c, items[i], "?GetInventory@Go@@QAEPAVGoInventory@@XZ"), sp[64]; int ns = bi ? item_list(c, bi, sp, 64) : 0;
+            for (int j = 0; j < ns && nk < 512; j++) known[nk++] = sp[j];
+        }
+    n = item_list(c, inv, items, 512);                     /* (the list was reused for the spellbooks) */
+    for (int i = 0; i < n; i++) {
+        uint32_t it = items[i], one = 1;
+        if (is_(c, it, FX("?IsEquipped@Go@@QBE_NXZ")) || is_(c, it, FX("?IsGold@Go@@QBE_NXZ")) || is_(c, it, FX("?IsSpellBook@Go@@QBE_NXZ"))) continue;
+        if (is_(c, it, FX("?HasInventory@Go@@QBE_NXZ"))) continue;                                  /* backpacks keep their contents */
+        if (rt_r32(G_MEM, it + 0x24)) continue;                                                     /* as the store's own sale */
+        uint32_t esp = c->esp, a[3] = {sstr(c, "gui"), sstr(c, "can_sell"), one};
+        int can = (int)(ext_thiscall(c, FX("?GetComponentBool@Go@@QAE_NPBD0_N@Z"), it, 3, a) & 0xff); scratch_end(c, esp);
+        if (!can) continue;
+        int spell = is_(c, it, FX("?IsSpell@Go@@QBE_NXZ"));
+        if (sell_option == 1 && is_(c, it, FX("?IsPotion@Go@@QBE_NXZ"))) continue;
+        if (sell_option == 2 && spell) continue;
+        if (sell_option == 3 && spell) {                   /* keep one of each spell not yet in a spellbook */
+            int have = 0; const char *t = go_template(c, it);
+            for (int j = 0; j < nk && !have; j++) have = !strcasecmp(go_template(c, known[j]), t);
+            if (!have) { if (nk < 512) known[nk++] = it; continue; }
+        }
+        if (sell_option == 4) { uint32_t mg = go_comp(c, it, "?GetMagic@Go@@QAEPAVGoMagic@@XZ"); if (mg && is_(c, mg, FX("?HasNonInnateEnchantments@GoMagic@@QAE_NXZ"))) continue; }
+        uint32_t p[2] = {GO_GOID(it), 0}, price = ext_thiscall(c, STORE_PRICE, gostore, 2, p);
+        G_MEM[gostore + 0x64] = 1;
+        uint32_t s3[3] = {GO_GOID(it), GO_GOID(shopper), price}; ext_thiscall(c, STORE_ADD, gostore, 3, s3);
+        sold++;
+    }
+    if (!sold) return;
+    uint32_t esp = c->esp, v[2] = {sstr(c, "sell"), 0}; ext_thiscall(c, FX("?PlayVoiceSound@Go@@QAEKPBD_N@Z"), store, 2, v); scratch_end(c, esp);
+    G_MEM[rt_r32(G_MEM, gostore + 0x14) + 0x1a6] = 0;     /* then the store screen's refresh, as after a sale */
+    if (ext_thiscall(c, 0x5dd3f7u, gostore, 0, 0) & 0xff) { uint32_t g = rt_r32(G_MEM, gostore + 0x14); ext_thiscall(c, 0x5003f8u, rt_r32(G_MEM, 0x7a0944u), 1, &g); }
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: sold %d items (%s)\n", sold, sell_options[sell_option]);
+}
+static void sell_button_text(Ctx *c) { ui_text(c, "text_auto_sell", "store", sell_options[sell_option]); }
+static uint32_t sell_listbox(Ctx *c)
+{
+    uint32_t esp = c->esp, f[2] = {sstr(c, "listbox_auto_sell_options"), sstr(c, "store")}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f);
+    scratch_end(c, esp); return w;
+}
+static void sell_list(Ctx *c, int show)
+{
+    uint32_t lb = sell_listbox(c); if (!lb) return;
+    if (show) {
+        ext_thiscall(c, FX("?RemoveAllElements@UIListbox@@QAEXXZ"), lb, 0, 0);
+        for (int i = 0; i < 5; i++) { uint32_t a[2] = {gpstr(c, sell_options[i]), (uint32_t)i}; ext_thiscall(c, FX("?AddElement@UIListbox@@AAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@H@Z"), lb, 2, a); }
+    } else {
+        int tag = (int)ext_thiscall(c, FX("?GetSelectedTag@UIListbox@@QAEHXZ"), lb, 0, 0);
+        if (tag >= 0 && tag < 5) sell_option = tag;
+        ui_text(c, "text_auto_sell", "store", sell_options[sell_option]);
+    }
+    uint32_t v = !!show; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, lb) + 0x48), lb, 1, &v);
+}
 static int override_impl(Ctx *c, uint32_t addr);
 /* an override either performs the whole call or returns 0 to let the original run; calls made while deciding (into the
  * game) clobber the registers the original expects at its entry, so they are put back */
@@ -758,6 +840,9 @@ static int override_impl(Ctx *c, uint32_t addr)
         else if (!strcmp(m, "activate_world_map")) world_map_open(c);
         else if (!strcmp(m, "exit_world_map")) world_map_close(c);
         else if (!strcmp(m, "unsummon_creatures")) end_party_spells(c, 0);
+        else if (!strcmp(m, "auto_sell_activate")) auto_sell(c);
+        else if (!strcmp(m, "auto_sell_list_options")) sell_list(c, 1);
+        else if (!strcmp(m, "auto_sell_hide_options")) sell_list(c, 0);
         else if (!strcmp(m, "eg_close")) {            /* closing the end-of-game dialog: ours, then the base game's own handling */
             uint32_t n = gpstr(c, "dsx_end_game");
             ext_thiscall(c, FX("?MarkInterfaceForDeactivation@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n);
