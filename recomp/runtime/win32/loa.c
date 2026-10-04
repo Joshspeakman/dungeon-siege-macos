@@ -357,6 +357,7 @@ static void OverheadMap_Singleton(Ctx *c) { RETC(singleton(&g_overhead)); }
 #define BODY_LOAD_CHORES     0x5ba227u   /* GoBody: (re)load its animations from its [body] data onto the current aspect */
 #define UISHELL (rt_r32(G_MEM, 0x7a065cu))
 static void ui_expansion_fixups(Ctx *c);
+static GasBlock *layer_gas(const char *file, const char *block);
 static uint32_t sstr(Ctx *c, const char *s) { uint32_t n = (uint32_t)strlen(s) + 1, g = scratch(c, n); memcpy(GP(g), s, n); return g; }
 static uint32_t template_data(Ctx *c, const char *tmpl, const char *component)
 {
@@ -583,9 +584,14 @@ static void ui_hide_group(Ctx *c, const char *group)
 }
 static int is_transformed(Ctx *c, uint32_t go);
 static int party_members(Ctx *c, uint32_t *out, int max);
+static struct { int rings, vo; int vo_volume; int loaded; } opt = {1, 1, 85, 0};   /* the expansion's own options */
+static void opt_load(void);
+static void apply_rings(Ctx *c);
 static void ui_expansion_fixups(Ctx *c)
 {
     char n[64]; uint32_t m[16]; int np = party_members(c, m, 16);
+    if (!opt.loaded) opt_load();
+    if (!opt.rings) apply_rings(c);
     for (int i = 1; i <= 8; i++) {   /* the "transformed" mark on the portraits of transformed party members */
         snprintf(n, sizeof n, "awp_transformed_portrait_%d", i); ui_show_window(c, n, i <= np && is_transformed(c, m[i - 1]));
         snprintf(n, sizeof n, "multi_inventory_dsx_pack_animal_%d", i); ui_hide_group(c, n);
@@ -608,6 +614,116 @@ static void world_map_open(Ctx *c);
 static void world_map_close(Ctx *c);
 static int end_party_spells(Ctx *c, int transforms);
 static void publish_keys(Ctx *c, uint32_t uigame);
+/* ---- the expansion's options: a second page of audio options (voice-overs) and "Enable Selection Rings" on the
+ * game options' second page. Kept in loa_options.txt next to the expansion's settings. ---- */
+static const char *opt_path(void)
+{
+    static char host[2048];
+    if (!*host && w32_host_path("C:\\Users\\player\\Documents\\Legends of Aranna\\Dungeon Siege\\loa_options.txt", host, sizeof host, 1)) *host = 0;
+    return host;
+}
+static void opt_load(void)
+{
+    opt.loaded = 1; FILE *f = *opt_path() ? fopen(opt_path(), "r") : 0; char line[128];
+    while (f && fgets(line, sizeof line, f)) { sscanf(line, "selection_rings = %d", &opt.rings); sscanf(line, "use_voiceovers = %d", &opt.vo); sscanf(line, "voiceover_volume = %d", &opt.vo_volume); }
+    if (f) fclose(f);
+}
+static void opt_save(void)
+{
+    FILE *f = *opt_path() ? fopen(opt_path(), "w") : 0; if (!f) return;
+    fprintf(f, "selection_rings = %d\nuse_voiceovers = %d\nvoiceover_volume = %d\n", opt.rings, opt.vo, opt.vo_volume); fclose(f);
+}
+static void apply_rings(Ctx *c)                          /* the party's selection rings */
+{
+    uint32_t m[16]; int n = party_members(c, m, 16);
+    for (int i = 0; i < n; i++) { uint32_t a = GO_ASPECT(m[i]), v = !!opt.rings; if (a) ext_thiscall(c, FX("?SetDrawSelectionIndicator@GoAspect@@QAEX_N@Z"), a, 1, &v); }
+}
+static void ui_group(Ctx *c, const char *group, int show)
+{
+    uint32_t esp = c->esp, a[4] = {sstr(c, group), !!show, 0, 0}; ext_thiscall(c, 0x6dee75u, UISHELL, 4, a); scratch_end(c, esp);
+}
+static void ui_text(Ctx *c, const char *window, const char *iface, const char *text)
+{
+    uint32_t esp = c->esp, f[2] = {sstr(c, window), sstr(c, iface)}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f);
+    if (w) { uint32_t ta[2] = {gpstr(c, text), 0}; ext_thiscall(c, FX("?SetText@UIText@@AAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), w, 2, ta); }
+    scratch_end(c, esp);
+}
+static void options_audio_page(Ctx *c, int page)
+{
+    ui_group(c, "options_audio_1", page == 1); ui_group(c, "options_audio_more", page == 1);
+    ui_group(c, "options_audio_2", page == 2); ui_group(c, "options_audio_back", page == 2);
+    if (page == 2) {
+        ui_text(c, "button_vosounds_text", "options_audio", opt.vo ? "On" : "Off");
+        uint32_t esp = c->esp, f[2] = {sstr(c, "slider_voiceovervolume"), sstr(c, "options_audio")}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f);
+        uint32_t v = (uint32_t)opt.vo_volume; if (w) ext_thiscall(c, 0x6f92a7u, w, 1, &v);   /* UISlider::SetValue */
+        scratch_end(c, esp);
+    }
+}
+static int options_message(Ctx *c, const char *m, uint32_t window)
+{
+    if (!opt.loaded) opt_load();
+    if (!strcmp(m, "show_options_audio") || !strcmp(m, "options_audio_back") || !strcmp(m, "default_options_audio")) options_audio_page(c, 1);
+    else if (!strcmp(m, "options_audio_more")) options_audio_page(c, 2);
+    else if (!strcmp(m, "toggle_vosounds")) { opt.vo = !opt.vo; ui_text(c, "button_vosounds_text", "options_audio", opt.vo ? "On" : "Off"); }
+    else if (!strcmp(m, "slider_change_volume_voiceover")) { if (window) opt.vo_volume = (int)rt_r32(G_MEM, window + 0x1e8); }
+    else if (!strcmp(m, "show_options_game") || !strcmp(m, "options_game_back")) ui_group(c, "options_game_selection_rings", 0);
+    else if (!strcmp(m, "options_game_more")) { ui_group(c, "options_game_selection_rings", 1); ui_text(c, "button_selection_rings_text", "options_game", opt.rings ? "On" : "Off"); }
+    else if (!strcmp(m, "toggle_selection_rings")) { opt.rings = !opt.rings; ui_text(c, "button_selection_rings_text", "options_game", opt.rings ? "On" : "Off"); }
+    else if (!strcmp(m, "set_options")) { opt_save(); apply_rings(c); }
+    else if (!strcmp(m, "cancel_options")) opt_load();
+    else return 0;
+    return 1;
+}
+/* ---- the intro: the expansion shows Mad Doc Software's logo after Gas Powered Games' (its intro_maddoc interface, and
+ * the maddoc fades and beat of its intro_settings). The base game's intro steps through named fades and beats (the
+ * current one's name at +0x10, a beat's remaining time at +0xc); the logo's steps are added between the Gas Powered
+ * Games fade-out and the monologue beat. ---- */
+static GasBlock *intro_settings(void)
+{
+    static GasBlock *g; static int tried;
+    if (!tried) { tried = 1; g = layer_gas("ui/config/intro_settings/intro_settings.gas", "intro_settings"); }
+    return g;
+}
+static void intro_step(Ctx *c, uint32_t intro, const char *name)   /* the intro's current step; a beat starts its timer */
+{
+    uint32_t esp = c->esp, a[2] = {sstr(c, name), (uint32_t)strlen(name)};
+    ext_thiscall(c, 0x402be9u, intro + 0x10, 2, a); scratch_end(c, esp);                 /* gpstring::assign(const char*, len) */
+    const char *beat = gas_get(gas_child(intro_settings(), "beats"), name, 0);
+    if (beat) rt_wf32(G_MEM, intro + 0xc, (float)atof(beat));
+}
+static void intro_fade(Ctx *c, const char *fade)              /* fade the logo panels (their group) as configured */
+{
+    const char *v = gas_get(gas_child(intro_settings(), "fades"), fade, 0); double dur = 2, from = 0, to = 1;
+    if (v) sscanf(v, "%lf , %lf , %lf", &dur, &from, &to);
+    uint32_t esp = c->esp, f[2] = {sstr(c, "md_panel_1"), sstr(c, "intro_maddoc")}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f);
+    scratch_end(c, esp);
+    if (!w) return;
+    uint32_t a[8]; memcpy(&a[0], &dur, 8); memcpy(&a[2], &from, 8); memcpy(&a[4], &to, 8); a[6] = w; a[7] = 0;
+    ext_thiscall(c, 0x701e8au, rt_r32(G_MEM, 0x7a08e8u), 8, a);
+}
+static int intro_message(Ctx *c, uint32_t intro, const char *m)
+{
+    uint32_t t = rt_r32(G_MEM, intro + 0x10); const char *cur = t ? GS(t) : "";
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: intro message %s (step %s)\n", m, cur);
+    static uint32_t ui_hide, ui_activate;
+    if (!ui_hide) { ui_hide = FX("?HideInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z");
+                    ui_activate = FX("?ActivateInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"); }
+    if (!strcmp(m, "end_gaspowered_fade") && !strcmp(cur, "gaspowered_fade_out") && intro_settings()) {
+        uint32_t g = gpstr(c, "intro_gaspowered"); ext_thiscall(c, ui_hide, UISHELL, 1, &g);
+        uint32_t a[2] = {gpstr(c, "ui:interfaces:intro:intro_maddoc"), 1}; ext_thiscall(c, ui_activate, UISHELL, 2, a);
+        intro_fade(c, "maddoc_fade_in"); intro_step(c, intro, "maddoc_fade_in");
+        return 1;
+    }
+    if (!strcmp(m, "end_maddoc_fade")) {
+        if (!strcmp(cur, "maddoc_fade_in")) intro_step(c, intro, "maddoc_beat");
+        else if (!strcmp(cur, "maddoc_fade_out")) {
+            uint32_t g = gpstr(c, "intro_maddoc"); ext_thiscall(c, ui_hide, UISHELL, 1, &g);
+            intro_step(c, intro, "monolog_beat");                 /* where the base game goes after its own logos */
+        }
+        return 1;
+    }
+    return 0;
+}
 static int override_impl(Ctx *c, uint32_t addr);
 /* an override either performs the whole call or returns 0 to let the original run; calls made while deciding (into the
  * game) clobber the registers the original expects at its entry, so they are put back */
@@ -674,6 +790,24 @@ static int override_impl(Ctx *c, uint32_t addr)
             uint32_t f[2] = {k ? sp : mp, iface}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f), v = !k;
             if (w) ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, w) + 0x48), w, 1, &v);
         }
+        c->esp += 4; return 1;
+    }
+    case 0x4b8f1b: {                                  /* the options screen's commands: the base game's, then the expansion's */
+        static int inside; if (inside) return 0;
+        uint32_t a[2] = {ARG(0), ARG(1)}, p = rt_r32(G_MEM, ARG(0)); char m[64]; snprintf(m, sizeof m, "%s", p ? GS(p) : "");
+        inside = 1; ext_thiscall(c, addr, c->ecx, 2, a); inside = 0;
+        options_message(c, m, a[1]);
+        c->esp += 4 + 8; return 1;
+    }
+    case 0x4e21c1: {                                  /* the intro's interface messages (const gpstring&, UIWindow&) */
+        uint32_t p = rt_r32(G_MEM, ARG(0));
+        if (!intro_message(c, c->ecx, p ? GS(p) : "")) return 0;
+        c->esp += 4 + 8; return 1;
+    }
+    case 0x4e2435: {                                  /* the intro: a beat is over */
+        uint32_t t = rt_r32(G_MEM, c->ecx + 0x10);
+        if (!t || strcmp(GS(t), "maddoc_beat")) return 0;
+        intro_fade(c, "maddoc_fade_out"); intro_step(c, c->ecx, "maddoc_fade_out");
         c->esp += 4; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
@@ -751,21 +885,25 @@ static uint32_t gpstr(Ctx *c, const char *text)          /* a heap gpstring with
     return g;
 }
 static GasBlock *omap; static char omap_for[128];
+static GasBlock *layer_gas(const char *file, const char *block)   /* a .gas block from the expansion's resources */
+{
+    extern char w32_game_layer[1024]; GasBlock *g = 0;
+    char dir[1100], path[1400]; snprintf(dir, sizeof dir, "%s/Resources", w32_game_layer);
+    DIR *d = opendir(dir); struct dirent *e;
+    while (d && !g && (e = readdir(d))) {
+        if (!strcasestr(e->d_name, ".dsres")) continue;
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name); uint8_t *data; size_t n;
+        if (!tank_read(path, file, &data, &n)) {
+            char *t = malloc(n + 1); memcpy(t, data, n); t[n] = 0; free(data); g = gas_child(gas_parse(t), block); free(t);
+        }
+    }
+    if (d) closedir(d);
+    return g;
+}
 static GasBlock *wmap_settings(void)                     /* ui:config:worldmap_settings (font, colours, marker texture) */
 {
-    extern char w32_game_layer[1024]; static GasBlock *g; static int tried;
-    if (!tried) {
-        tried = 1; char dir[1100], path[1400]; snprintf(dir, sizeof dir, "%s/Resources", w32_game_layer);
-        DIR *d = opendir(dir); struct dirent *e;
-        while (d && !g && (e = readdir(d))) {
-            if (!strcasestr(e->d_name, ".dsres")) continue;
-            snprintf(path, sizeof path, "%s/%s", dir, e->d_name); uint8_t *data; size_t n;
-            if (!tank_read(path, "ui/config/worldmap_settings/worldmap_settings.gas", &data, &n)) {
-                char *t = malloc(n + 1); memcpy(t, data, n); t[n] = 0; free(data); g = gas_child(gas_parse(t), "worldmap_settings"); free(t);
-            }
-        }
-        if (d) closedir(d);
-    }
+    static GasBlock *g; static int tried;
+    if (!tried) { tried = 1; g = layer_gas("ui/config/worldmap_settings/worldmap_settings.gas", "worldmap_settings"); }
     return g;
 }
 static GasBlock *overheadmap(Ctx *c)                      /* the current map's overhead map description */

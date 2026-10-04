@@ -46,6 +46,9 @@ OVERRIDES = {
     0x004e72f3: 'UIGame: publish the in-game key commands to the input binder',
     0x00533eb3: 'GoAspect::Xfer(PersistContext&)',
     0x004997d7: 'UIGame: the campaign is won (end-of-game dialog)',
+    0x004b8f1b: 'UIOptions: options screen commands (const gpstring&, UIWindow&)',
+    0x004e21c1: 'UIIntro: interface messages (const gpstring&, UIWindow&)',
+    0x004e2435: 'UIIntro: a beat is over',
 }
 
 class Unsupported(Exception): pass
