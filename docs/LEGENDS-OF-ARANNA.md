@@ -49,7 +49,8 @@ The expansion's new keys work as in the original (its default bindings come from
 Working: the main menu, character creation, the campaign start and its quests and dialogue, the expansion's inventory
 and journal screens, the world map (pieces revealed as you explore, the current area marked), potion redistribution,
 the expansion's AI (new monster behaviour, "approach" jobs, damage transfer), transformation spells, and the
-Unsummon/Untransform commands. While transformed, a character cannot pick up items or talk, as in the original.
+Unsummon/Untransform commands, backpacks (right-click one in the inventory to open it; items drag in and out; Arrange
+sorts it), set-item bonuses and the expansion's new item bonuses. While transformed, a character cannot pick up items or talk, as in the original.
 
 Not done yet, or simplified:
 
@@ -60,7 +61,6 @@ Not done yet, or simplified:
 - The expansion's new kinds of item bonus: spell cost and spell damage (for the spell groups they name, such as fire or
   healing spells), weapon range, and the chance to cast a spell at an attacker when hit (special defense) work, from
   items, their random prefixes and suffixes, and sets.
-- Backpacks (an item with its own inventory, opened with a right-click) do not open yet.
 - Shops' Sell All: written to the expansion's description (sells everything not equipped; its list offers Sell All,
   and Sell All but Potions / Spells / Unique Spells / Magic Items; spellbooks, gold, backpacks and unsellable items
   are kept) but not yet tried in a shop.
@@ -71,7 +71,7 @@ Not done yet, or simplified:
   (tested on one Mac); playing together with other players has not been tested yet. In the staging area,
   "Import DS Character..." offers your Dungeon Siege characters and "Import DS LOA Character..." your Legends of
   Aranna ones.
-- Not yet done: backpacks, the Voice Overs options' effect, and the "Attack Area" key (Shift).
+- Not yet done: the Voice Overs options' effect, and the "Attack Area" key (Shift).
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
