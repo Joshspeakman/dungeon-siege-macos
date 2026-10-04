@@ -462,6 +462,8 @@ static int ui_wrap(Ctx *c, uint32_t fn, int nargs)
 
 static void world_map_open(Ctx *c);
 static void world_map_close(Ctx *c);
+static int end_party_spells(Ctx *c, int transforms);
+static void publish_keys(Ctx *c, uint32_t uigame);
 int loa_override(Ctx *c, uint32_t addr)
 {
     switch (addr) {
@@ -483,8 +485,15 @@ int loa_override(Ctx *c, uint32_t addr)
         if (!strcmp(m, "redistribute_potions")) redistribute_potions(c, 0);
         else if (!strcmp(m, "activate_world_map")) world_map_open(c);
         else if (!strcmp(m, "exit_world_map")) world_map_close(c);
+        else if (!strcmp(m, "unsummon_creatures")) end_party_spells(c, 0);
+        else if (!strcmp(m, "untransform_characters")) end_party_spells(c, 1);
         else return 0;                                /* the base engine's own commands */
         c->esp += 4 + 8; return 1;
+    }
+    case 0x4e72f3: {                                  /* UIGame: publish the in-game key commands */
+        static int inside; if (inside) return 0;
+        inside = 1; ext_thiscall(c, addr, c->ecx, 0, 0); publish_keys(c, c->ecx); inside = 0;
+        c->esp += 4; return 1;
     }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
@@ -699,6 +708,81 @@ static void world_map_close(Ctx *c)
     uint32_t n = gpstr(c, "world_map");
     /* deferred: this runs while the map's own button is handling the click */
     ext_thiscall(c, FX("?MarkInterfaceForDeactivation@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n);
+}
+
+/* ---- the party's spells: dismissing summoned creatures and ending transformations. Both kinds of spell keep a
+ * generic state on the party member naming the controlling spell object, which ends the effect on WE_REQ_DEACTIVATE
+ * (the expansion's own buttons do the same). The states are a std::map (MSVC: head node at map+4, nodes
+ * {left, parent, right, key gpstring, value}, leaves point at a shared nil node). */
+static int party_members(Ctx *c, uint32_t *out, int max)
+{
+    uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
+    uint32_t party = server ? ext_thiscall(c, FX("?GetScreenParty@Server@@QAEPAVGo@@XZ"), server, 0, 0) : 0;
+    if (!party) return 0;
+    uint32_t kids = ext_thiscall(c, FX("?GetChildren@Go@@QBEABUGopColl@@XZ"), party, 0, 0);
+    int n = (int)ext_thiscall(c, FX("?Size@GopColl@@ABEHXZ"), kids, 0, 0), m = 0;
+    for (int i = 0; i < n && m < max; i++) { uint32_t k = (uint32_t)i, g = ext_thiscall(c, FX("?Get@GopColl@@ABEPAVGo@@H@Z"), kids, 1, &k); if (g) out[m++] = g; }
+    return m;
+}
+static int generic_states(uint32_t actor, uint32_t *node, int max)   /* the actor's state nodes, in order */
+{
+    uint32_t head = rt_r32(G_MEM, actor + 0x4c), n = rt_r32(G_MEM, head), m = 0;   /* head->left: the first node */
+    if (!head || n == head) return 0;
+    uint32_t nil = rt_r32(G_MEM, n);                                               /* the first node's left is nil */
+    while (n != head && m < (uint32_t)max) {
+        node[m++] = n;
+        uint32_t r = rt_r32(G_MEM, n + 8);
+        if (r != nil) { n = r; for (int g = 0; g < 64 && rt_r32(G_MEM, n) != nil; g++) n = rt_r32(G_MEM, n); }
+        else {
+            uint32_t p = rt_r32(G_MEM, n + 4); int g = 0;
+            while (n == rt_r32(G_MEM, p + 8) && g++ < 64) { n = p; p = rt_r32(G_MEM, p + 4); }
+            if (rt_r32(G_MEM, n + 8) != p) n = p;
+        }
+    }
+    return (int)m;
+}
+#define STATE_NAME(node)  rt_r32(G_MEM, (node) + 0xc)
+#define STATE_SPELL(node) rt_r32(G_MEM, (node) + 0x20)
+static int end_party_spells(Ctx *c, int transforms)
+{
+    static uint32_t we_deactivate; if (!we_deactivate && !fubi_enum(c, "eWorldEvent", "we_req_deactivate", &we_deactivate)) return 0;
+    static const char *const summon[] = {"spell_summon", "spell_summon_clone", "spell_summon_multiple", "spell_summon_random"};
+    uint32_t member[16], node[64]; int n = party_members(c, member, 16), done = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t actor = GO_ACTOR(member[i]); if (!actor) continue;
+        int k = generic_states(actor, node, 64);
+        for (int j = 0; j < k; j++) {
+            uint32_t nm = STATE_NAME(node[j]), spell = STATE_SPELL(node[j]), sg = goid_go(c, spell); int hit = 0;
+            if (!sg) continue;
+            if (transforms) hit = nm && !strcasecmp(GS(nm), "transformed");
+            else for (int q = 0; q < 4 && !hit; q++) { uint32_t cn = gstr(summon[q]); hit = ext_thiscall(c, FX("?HasComponent@Go@@QBE_NPBD@Z"), sg, 1, &cn) & 0xff; }
+            if (!hit) continue;
+            uint32_t a[5] = {we_deactivate, GO_GOID(member[i]), spell, GO_GOID(member[i]), 0};
+            w32_callback(c, fn_post_data, 5, a); done++;
+        }
+    }
+    return done;
+}
+
+/* ---- the expansion's key commands, published to the game's input binder next to the base game's (the bindings
+ * themselves come from the expansion's config/input_bindings.gas) ---- */
+static int world_map_visible(Ctx *c) { uint32_t n = gpstr(c, "world_map"); return UISHELL && (ext_thiscall(c, FX("?IsInterfaceVisible@UIShell@@QAE_NABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n) & 0xff); }
+static void key_toggle_world_map(Ctx *c) { if (world_map_visible(c)) world_map_close(c); else world_map_open(c); RET(1, 0); }
+static void key_redistribute_potions(Ctx *c) { redistribute_potions(c, 0); RET(1, 0); }
+static void key_unsummon(Ctx *c) { end_party_spells(c, 0); RET(1, 0); }
+static void key_untransform(Ctx *c) { end_party_spells(c, 1); RET(1, 0); }
+static void publish_keys(Ctx *c, uint32_t uigame)
+{
+    static const struct { const char *name; void (*fn)(Ctx *); } keys[] = {
+        {"toggle_world_map", key_toggle_world_map}, {"redistribute_potions", key_redistribute_potions},
+        {"unsummon_critter", key_unsummon}, {"untransform_actor", key_untransform},
+    };
+    uint32_t binder = rt_r32(G_MEM, uigame + 8);                  /* the in-game input binder */
+    for (unsigned i = 0; i < sizeof keys / sizeof *keys; i++) {
+        static uint32_t thunk[8]; if (!thunk[i]) thunk[i] = w32_thunk_register(keys[i].name, keys[i].fn);
+        uint32_t a[5] = {gpstr(c, keys[i].name), thunk[i], 0, uigame, 0x4e1adau};   /* name; functor {method, adjust, object, invoker} */
+        ext_thiscall(c, 0x43b0fau, binder, 5, a);
+    }
 }
 
 void loa_register(void)

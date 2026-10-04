@@ -177,6 +177,9 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
         else if (!strcmp(a->kind, "key")) {
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
+        } else if (!strcmp(a->kind, "hold")) {            /* hold:vk,frames: a key held down (the modifier of a chord) */
+            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
+            if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
         else if (!strcmp(a->kind, "wheel") && fno >= a->frame && fno < a->frame + (uint32_t)abs(a->x)) post(0x20a, ((uint32_t)(int16_t)(a->x > 0 ? 120 : -120) << 16), pos_lp());   /* x notches */
         else if (!strcmp(a->kind, "type") && fno == a->frame) {   /* real NSEvents through the window (keyboard path) */
