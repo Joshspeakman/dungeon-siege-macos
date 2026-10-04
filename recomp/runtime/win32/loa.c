@@ -68,7 +68,7 @@ static int map_nodes(uint32_t map, uint32_t *node, int max)
 typedef struct { uint32_t key, kind; uint32_t v; } Side;
 static Side side[16384]; static pthread_mutex_t side_lock = PTHREAD_MUTEX_INITIALIZER;
 enum { S_ALLOW_MOVE = 1, S_LODFI, S_PCONTENT_INV, S_DAMAGE_TAKER, S_SPELLBOOK, S_IS_SET_ITEM, S_SET_COUNT, S_REAL_MINUTES, S_COPY_INV,
-       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT, S_BLEND_SPEED, S_SET_GROUP, S_SET_FILE };
+       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT, S_BLEND_SPEED, S_SET_GROUP, S_SET_FILE, S_SHRINK_BASE, S_SHRINK_CHECK };
 static uint32_t side_get(uint32_t key, uint32_t kind, uint32_t dflt)
 {
     pthread_mutex_lock(&side_lock); uint32_t h = (key * 2654435761u ^ kind * 40503u) & 16383, r = dflt;
@@ -1001,6 +1001,23 @@ static const char *const loa_alter_names[] = {"ALTER_SPECIAL_DEFENSE", "ALTER_SP
 enum { LA_SPECIAL_DEFENSE, LA_SPELL_COST, LA_SPELL_DAMAGE, LA_RANGED_RANGE, LA_RENDER_SCALE, LA_COMBAT_TO_NATURE, LA_COUNT };
 static uint32_t loa_alter_base(void) { static uint32_t b; if (!b) b = rt_r32(G_MEM, 0x7a3bd0u + 8); return b; }   /* the table's end */
 static uint32_t loa_alter_str[LA_COUNT];
+/* enchantments applied to an object (by spells): GoDb keeps a map (+0x64) from the target (Go*) to its enchantment
+ * storage, a vector (+4/+8) of enchantments: alteration at +0, applied value at +0x68 (multiplied values combine) */
+static float applied_alteration(uint32_t go, uint32_t alteration, int multiply)
+{
+    uint32_t godb = rt_r32(G_MEM, 0x7a05c8u); static uint32_t node[8192]; float v = multiply ? 1 : 0; int found = 0;
+    int n = godb ? map_nodes(godb + 0x64, node, 8192) : 0;
+    for (int i = 0; i < n; i++) {
+        if (rt_r32(G_MEM, node[i] + 0xc) != go) continue;
+        uint32_t st = rt_r32(G_MEM, node[i] + 0x10); if (!st) break;
+        for (uint32_t e = rt_r32(G_MEM, st + 4), end = rt_r32(G_MEM, st + 8); e && e < end; e += 4) {
+            uint32_t en = rt_r32(G_MEM, e); if (!en || rt_r32(G_MEM, en) != alteration) continue;
+            float x = rt_rf32(G_MEM, en + 0x68); found = 1; if (multiply) v *= x; else v += x;
+        }
+        break;
+    }
+    return found ? v : 0;
+}
 typedef struct { int which; float v; char group[48]; char skrit[200]; } LoaBonus;   /* skrit: special defense's */      /* one enchantment of the expansion's kinds */
 static float eval_formula(Ctx *c, const char *f, uint32_t goid)          /* the engine's evaluator (variables of goid) */
 {
@@ -1418,6 +1435,19 @@ static int override_impl(Ctx *c, uint32_t addr)
     }
     case 0x69c1be: {                                  /* nema::Blender::Update(float dt): a speed modifier scales the step */
         if (set_pending[0]) set_items_pending(c);     /* (also the frame tick for work deferred from scripts) */
+        {   /* alter_render_scale (Diminution): the creature drawn smaller while the enchantment lasts (checked 4x a second) */
+            uint32_t na = rt_r32(G_MEM, c->ecx), go = na ? goid_go(c, rt_r32(G_MEM, na + 0x10)) : 0;
+            uint32_t ms = (uint32_t)(now_s() * 1000), last = go ? side_get(go, S_SHRINK_CHECK, 0) : 0;
+            if (go && ms - last > 250) {
+                side_set(go, S_SHRINK_CHECK, ms ? ms : 1);
+                float f = applied_alteration(go, loa_alter_base() + LA_RENDER_SCALE, 1);
+                uint32_t as = GO_ASPECT(go), base = side_get(go, S_SHRINK_BASE, 0);
+                if (as && f > 0.05f && f < 0.999f) {
+                    if (!base) { base = rt_r32(G_MEM, as + 0x1c); side_set(go, S_SHRINK_BASE, base); }
+                    rt_wf32(G_MEM, as + 0x1c, bitsf(base) * f);
+                } else if (as && base) { rt_w32(G_MEM, as + 0x1c, base); side_set(go, S_SHRINK_BASE, 0); }
+            }
+        }
         uint32_t m = side_get(c->ecx, S_BLEND_SPEED, 0);
         if (m) rt_wf32(G_MEM, c->esp + 4, ARGF(0) / bitsf(m));   /* a duration factor: slow 2.0, haste 0.8 ("1 / 0.8 = 1.25") */
         if (m && getenv("DS_LOA_SPEEDTEST")) { static int n; if (!(n++ % 120)) fprintf(stderr, "loa: blender %08x step scaled by 1/%.2f\n", c->ecx, bitsf(m)); }
@@ -1800,6 +1830,38 @@ static void key_untransform(Ctx *c)
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
     uint32_t m[16];
     if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
+    if (getenv("DS_LOA_SHRINKTEST") && party_members(c, m, 16)) {  /* development: Y spawns a bear, then shrinks it (Diminution) */
+        static uint32_t bear;
+        uint32_t ha = GO_ASPECT(m[0]), yes = 1; if (ha) ext_thiscall(c, FX("?SetIsInvincible@GoAspect@@QAEX_N@Z"), ha, 1, &yes);
+        uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+        if (!bear) {
+            uint32_t esp = c->esp, a2[1] = {sstr(c, "dsx_bear")};
+            uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBD@Z"), 1, a2);
+            uint32_t pl = go_comp(c, m[0], "?GetPlacement@Go@@QAEPAVGoPlacement@@XZ"), pos = ext_thiscall(c, FX("?GetPosition@GoPlacement@@QBEABUSiegePos@@XZ"), pl, 0, 0);
+            ext_thiscall(c, FX("?SetStartingPos@GoCloneReq@@QAEXABUSiegePos@@@Z"), req, 1, &pos);
+            bear = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+            scratch_end(c, esp); fprintf(stderr, "loa: test bear %08x\n", bear); RET(1, 0);
+        }
+        static int applied; uint32_t aiq0 = w32_callback(c, FX("?FUBI_GetClassSingleton@AIQuery@@CAPAV1@XZ"), 0, 0);
+        if (applied) {
+            static uint32_t armor; if (!armor) fubi_enum(c, "eAlteration", "alter_melee_damage_min", &armor);
+            uint32_t q1[2] = {goid_go(c, bear), loa_alter_base() + LA_RENDER_SCALE}, q2[2] = {goid_go(c, bear), armor};
+            (void)q1; (void)q2; (void)aiq0;
+            fprintf(stderr, "loa: bear applied: render scale %.2f, melee min %.2f; scale mult %.2f\n", applied_alteration(goid_go(c, bear), loa_alter_base() + LA_RENDER_SCALE, 1),
+                    applied_alteration(goid_go(c, bear), armor, 0), rt_rf32(G_MEM, GO_ASPECT(goid_go(c, bear)) + 0x1c));
+            RET(1, 0);
+        }
+        applied = 1;
+        uint32_t esp = c->esp, a[2] = {GO_GOID(m[0]), sstr(c, "spell_diminution")};
+        uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBUGoid_@@PBD@Z"), 2, a);
+        uint32_t sp = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+        scratch_end(c, esp);
+        uint32_t mg = go_comp(c, goid_go(c, sp), "?GetMagic@Go@@QAEPAVGoMagic@@XZ"), ea[2] = {bear, GO_GOID(m[0])};
+        if (mg) ext_thiscall(c, FX("?SApplyEnchantments@GoMagic@@QAEXPBUGoid_@@0@Z"), mg, 2, ea);
+        uint32_t aiq = w32_callback(c, FX("?FUBI_GetClassSingleton@AIQuery@@CAPAV1@XZ"), 0, 0), q[2] = {goid_go(c, bear), loa_alter_base() + LA_RENDER_SCALE};
+        fprintf(stderr, "loa: diminution applied to %08x: render scale sum %.2f\n", bear, ext_thiscall_f(c, FX("?GetAlterationSum@AIQuery@@QBEMPBVGo@@W4eAlteration@@@Z"), aiq, 2, q));
+        RET(1, 0);
+    }
     if (getenv("DS_LOA_FXTEST") && party_members(c, m, 16)) {     /* development: Y spawns a ghost, then pauses/resumes its effects */
         static uint32_t ghost; static int step;
         if (!ghost) {
