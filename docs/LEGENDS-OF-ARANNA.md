@@ -56,9 +56,10 @@ Not done yet, or simplified:
 - Transformation spells: the character becomes the creature (its model, skins and animations) and changes back when
   the spell ends or with Untransform. A game saved while transformed stores the character in their own form; after
   loading, they stay in their own form until the spell's time runs out.
-- Set items: the bonuses for wearing several pieces of a set apply (and are recounted whenever a piece changes hands),
-  except the expansion-only kinds: "chance to cast a spell when hit" (special defense), spell cost, spell damage and
-  ranged range, about a fifth of them.
+- Set items: the bonuses for wearing several pieces of a set apply, and are recounted whenever a piece changes hands.
+- The expansion's new kinds of item bonus: spell cost and spell damage (for the spell groups they name, such as fire or
+  healing spells), and weapon range work, from items, their random prefixes and suffixes, and sets. "Chance to cast
+  a spell when hit" (special defense) is not done yet.
 - Backpacks (an item with its own inventory, opened with a right-click) do not open yet.
 - Shops' Sell All: written to the expansion's description (sells everything not equipped; its list offers Sell All,
   and Sell All but Potions / Spells / Unique Spells / Magic Items; spellbooks, gold, backpacks and unsellable items
