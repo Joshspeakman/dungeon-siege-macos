@@ -60,6 +60,9 @@ OVERRIDES = {
     0x005a97b8: 'Rules: damage a Go (victim, attacker, weapon, amount, ...)',
     0x004ff967: 'UIInventoryManager: an inventory item is used (right click)',
     0x0043b01e: 'InputBinder: handle a key',
+    0x0062e80b: 'sound: play a sample (2D)',
+    0x0062eae8: 'sound: play a sample (positional)',
+    0x0062ee57: 'sound: play a stream',
 }
 
 class Unsupported(Exception): pass

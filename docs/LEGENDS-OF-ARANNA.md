@@ -65,16 +65,16 @@ Not done yet, or simplified:
 - Shops' Sell All: written to the expansion's description (sells everything not equipped; its list offers Sell All,
   and Sell All but Potions / Spells / Unique Spells / Magic Items; spellbooks, gold, backpacks and unsellable items
   are kept) but not yet tried in a shop.
-- Options: the expansion's extra pages work (Enable Selection Rings, Voice Overs, Voice Over Volume) and are
-  remembered, but Voice Overs and Voice Over Volume do not yet change how dialogue is played (it plays at the
-  Voice Volume).
+- Options: the expansion's extra pages work and are remembered: Enable Selection Rings, Voice Overs (spoken dialogue
+  on or off) and Voice Over Volume (dialogue's own volume; Voice Volume is then the characters' other sounds).
 - Multiplayer: hosting a Legends of Aranna game, creating or importing a character and starting in Arhok works
   (tested on one Mac); playing together with other players has not been tested yet. In the staging area,
   "Import DS Character..." offers your Dungeon Siege characters and "Import DS LOA Character..." your Legends of
   Aranna ones.
 - The "Attack Area" key (Shift) attacks what is under the pointer, or the ground there, like the base game's Attack key;
   the original expansion's exact behaviour may differ.
-- Not yet done: the Voice Overs options' effect.
+- Not done: two rare spell effects, "shrink" (render scale) and moving combat magic to nature magic, which one spell
+  each uses.
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
