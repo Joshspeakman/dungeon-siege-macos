@@ -529,6 +529,28 @@ static int is_transformed(Ctx *c, uint32_t go)
     for (int i = 0; i < n; i++) { uint32_t k = rt_r32(G_MEM, node[i] + 0xc); if (k && !strcasecmp(GS(k), "transformed")) return 1; }
     return 0;
 }
+/* a game saved while transformed stores the character in their own form (see GoAspect::Xfer), but the spell's
+ * "Transformed" state and its timer carry on: the creature form is put back, from the spell's own
+ * [spell_transformation] templateName */
+static void restore_transformation(Ctx *c, uint32_t go)
+{
+    if (side_get(go, S_TRANSFORM, 0) || !(ext_thiscall(c, FX("?IsScreenPartyMember@Go@@QBE_NXZ"), go, 0, 0) & 0xff)) return;
+    uint32_t actor = GO_ACTOR(go), node[64]; if (!actor) return;
+    int n = generic_states(actor, node, 64);
+    for (int i = 0; i < n; i++) {
+        uint32_t k = rt_r32(G_MEM, node[i] + 0xc); if (!k || strcasecmp(GS(k), "transformed")) continue;
+        uint32_t sp = goid_go(c, rt_r32(G_MEM, node[i] + 0x20)); if (!sp || sp == go) return;
+        uint32_t esp = c->esp, comp = sstr(c, "spell_transformation");
+        if (ext_thiscall(c, FX("?HasComponent@Go@@QBE_NPBD@Z"), sp, 1, &comp) & 0xff) {
+            uint32_t a[2] = {comp, sstr(c, "templateName")};
+            const char *t = gpstr_text(ext_thiscall(c, FX("?GetComponentString@Go@@QAEABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@PBD0@Z"), sp, 2, a));
+            char tmpl[96]; snprintf(tmpl, sizeof tmpl, "%s", t); scratch_end(c, esp);
+            if (*tmpl && transform_go(c, go, tmpl) && getenv("DS_EXTLOG")) fprintf(stderr, "loa: %08x back in the form of %s after loading\n", go, tmpl);
+            return;
+        }
+        scratch_end(c, esp); return;
+    }
+}
 static void TransformationManager_STransformMe(Ctx *c)          /* (Go*, gpstring& creature template, gpstring& spell) */
 {
     uint32_t t = rt_r32(G_MEM, ARG(1)); transform_go(c, ARG(0), t ? GS(t) : ""); RET(0, 3);
@@ -715,6 +737,7 @@ static void ui_hide_group(Ctx *c, const char *group)
 }
 static int is_transformed(Ctx *c, uint32_t go);
 static int party_members(Ctx *c, uint32_t *out, int max);
+static void restore_transformation(Ctx *c, uint32_t go);
 static struct { int rings, vo; int vo_volume; int loaded; } opt = {1, 1, 85, 0};   /* the expansion's own options */
 static void opt_load(void);
 static void apply_rings(Ctx *c);
@@ -1444,6 +1467,7 @@ static int override_impl(Ctx *c, uint32_t addr)
             uint32_t ms = (uint32_t)(now_s() * 1000), last = go ? side_get(go, S_SHRINK_CHECK, 0) : 0;
             if (go && ms - last > 250) {
                 side_set(go, S_SHRINK_CHECK, ms ? ms : 1);
+                restore_transformation(c, go);
                 float f = applied_alteration(go, loa_alter_base() + LA_RENDER_SCALE, 1);
                 uint32_t as = GO_ASPECT(go), base = side_get(go, S_SHRINK_BASE, 0);
                 if (as && f > 0.05f && f < 0.999f) {
