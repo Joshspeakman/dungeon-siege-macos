@@ -20,6 +20,7 @@ CC = {'o': 'CC_O', 'no': 'CC_NO', 'b': 'CC_B', 'ae': 'CC_AE', 'e': 'CC_E', 'ne':
 # the registers and memory as the original code would, and does nothing unless its feature is turned on.
 HOOKS = {
     0x0059000f: 'mood loaded: scale fog and frustum (draw distance)',
+    0x0061d06c: 'Skrit compiler message (this, level, format, ...): printed with DS_SKRITLOG=1',
 }
 JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd', 'hlt', 'cli', 'sti', 'int1', 'into',
         'int', 'aaa', 'aas', 'aam', 'aad', 'daa', 'das', 'salc', 'les', 'lds', 'retf', 'ljmp', 'lcall', 'arpl', 'bound',

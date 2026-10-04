@@ -25,10 +25,45 @@ static void mood_loaded(Ctx *c)
     else { G_MEM[bp - 0x10f] = 1; sf(bp - 0x10c, 45.0f * f); sf(bp - 0x108, 60.0f * f); }   /* the game's default frustum, scaled */
 }
 
+int vm_committed(uint32_t addr, uint32_t size);
+static int readable(uint32_t p) { return p >= 0x10000 && vm_committed(p, 1); }
+/* printf of a guest format string with guest cdecl arguments starting at stack address ap (%s %d %i %u %x %c %f %%) */
+static void guest_format(char *out, size_t cap, uint32_t fmt, uint32_t ap)
+{
+    size_t n = 0; const char *f = (const char *)GP(fmt);
+    for (; *f && n + 1 < cap; f++) {
+        if (*f != '%') { out[n++] = *f; continue; }
+        char spec[16] = "%"; int k = 1; f++;
+        while (*f && strchr("-+ #0123456789.l", *f) && k < 12) spec[k++] = *f++;
+        if (!*f) break;
+        spec[k++] = *f; spec[k] = 0; int w = 0;
+        switch (*f) {
+        case 's': { uint32_t p = rt_r32(G_MEM, ap); ap += 4; w = snprintf(out + n, cap - n, spec, readable(p) ? (const char *)GP(p) : "(?)"); break; }
+        case 'd': case 'i': case 'u': case 'x': case 'X': case 'c': w = snprintf(out + n, cap - n, spec, rt_r32(G_MEM, ap)); ap += 4; break;
+        case 'f': case 'g': { double v; memcpy(&v, GP(ap), 8); ap += 8; w = snprintf(out + n, cap - n, spec, v); break; }
+        case '%': out[n] = '%'; w = 1; break;
+        default: w = 0;
+        }
+        if (w > 0) n += (size_t)w < cap - n ? (size_t)w : cap - n - 1;
+    }
+    out[n] = 0;
+}
+/* the Skrit compiler's message routine: retail builds discard these; DS_SKRITLOG=1 prints them */
+static void skrit_message(Ctx *c)
+{
+    if (!getenv("DS_SKRITLOG")) return;
+    uint32_t fmt = rt_r32(G_MEM, c->esp + 12);
+    if (fmt < 0x720000 || fmt >= 0x7ac000) return;          /* the messages are string constants in the exe (.rdata/.data) */
+    char msg[1024]; guest_format(msg, sizeof msg, rt_r32(G_MEM, c->esp + 12), c->esp + 16);
+    uint32_t level = rt_r32(G_MEM, c->esp + 8);
+    fprintf(stderr, "skrit %s: %s\n", level >= 2 ? "error" : level == 1 ? "warning" : "note", msg);
+}
+
 void rt_hook(Ctx *c, uint32_t addr)
 {
     switch (addr) {
     case 0x0059000f: mood_loaded(c); break;
+    case 0x0061d06c: skrit_message(c); break;
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */
         if (getenv("DS_HOOKTRACE")) fprintf(stderr, "hook %08x: eax %08x ecx %08x edx %08x ebx %08x esi %08x edi %08x | ret %08x args %08x %08x %08x %08x\n",
                                             addr, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi, rt_r32(G_MEM, c->esp), rt_r32(G_MEM, c->esp + 4),

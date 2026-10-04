@@ -15,6 +15,13 @@ int w32_prepare(const char *exe, const char *game_dir, const char *drive_c, cons
     extern int w32_protect_memory; void w32_seh_init(void);
     w32_protect_memory = getenv("W32_NOPROTECT") ? 0 : 1;
     if (w32_load(exe)) return -1;
+    /* Legends of Aranna: its data as a read-only layer over the game folder, and the engine functions it needs */
+    const char *exp = getenv("DS_EXPANSION");
+    if (exp && *exp) {
+        extern char w32_game_layer[1024]; void loa_register(void); int ext_install(void);
+        snprintf(w32_game_layer, sizeof w32_game_layer, "%s", exp);
+        loa_register(); ext_install();
+    }
     w32_seh_init();
     uint32_t stk = vm_alloc(0, 1u << 20, 0x3000, 4);
     memset(&game_ctx, 0, sizeof game_ctx);
