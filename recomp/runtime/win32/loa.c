@@ -20,6 +20,15 @@ static void modifiers_dirty(Ctx *c, uint32_t go) { uint32_t a = 1; if (go) ext_t
 #define FX(name) ({ static uint32_t _a; if (!_a) _a = ext_export(name); _a; })
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 #define GPSTR_CTOR 0x42aea8u                             /* gpstring::gpstring() */
+#define FUEL_HANDLE          0x44375cu   /* FuelHandle::FuelHandle(const char* address) */
+#define FUEL_COPY            0x43b7c4u   /* FuelHandle copy constructor */
+#define FUEL_FREE            0x43b62bu   /* ~FuelHandle */
+#define FUEL_CHILDREN        0x43b69cu   /* ListChildBlocks(vector<FuelHandle>&, depth) */
+#define FUEL_CHILDREN_FREE   0x43c169u
+#define FUEL_CHILD           0x45d3a7u   /* GetChildBlock(FuelHandle& out, const char*) */
+#define FUEL_GET_INT         0x445ae1u   /* Get(const char* key, int&, bool) */
+static int fuel_string(Ctx *c, uint32_t h, const char *key, char *out, size_t cap);
+static const char *go_template(Ctx *c, uint32_t go);
 static uint32_t gstr(const char *s);
 static uint32_t gpstr(Ctx *c, const char *text);
 static float bitsf(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
@@ -540,7 +549,13 @@ static void TimeOfDay_SetRealMinutesModifier(Ctx *c)
     float m = ARGF(0); if (m > 0.01f) rt_wf32(G_MEM, THIS, bitsf(base) * m);
     RET(0, 1);
 }
-static void UIGame_SetGameInputBinderActive(Ctx *c) { RET(0, 1); }
+/* UIGame::SetGameInputBinderActive(bool): the party wrangler turns the game's keys off while the screen fades into a
+ * cutscene, so that Esc cannot interrupt it ("black screen of doom"). Nothing in the expansion turns them on again:
+ * they come back when the cutscene starts (world state ws_sp_nis) or after 10 seconds at the most. The game's input
+ * binder (UIGame+8) handles keys in 0x43b01e. */
+static uint32_t game_binder, ui_game; static double binder_off_since;
+static double now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
+static void UIGame_SetGameInputBinderActive(Ctx *c) { binder_off_since = (ARG(0) & 0xff) ? 0 : now_s(); RET(0, 1); }
 static void WorldMap_GetUsingPlayerJournal(Ctx *c) { RET(0, 0); }
 /* a FuBi enum constant by name: the specs FuBi registers form a list (head 0x79cf38, next +0x28) of
  * {name, ..., ToString +0xc, ..., begin +0x1c, end +0x20} */
@@ -612,7 +627,46 @@ static int redistribute_potions(Ctx *c, uint32_t except)
     }
     return 1;
 }
-static void GoCommon_SToggleTriggeredEffects(Ctx *c) { RET(0, 2); }
+/* GoCommon::SToggleTriggeredEffects(event name, on): a status effect (petrify and the like) pauses the effects a
+ * creature's template triggers start on that event (a ghost's eye glow on WE_ENEMY_SPOTTED). Off: its running effect
+ * scripts stop. On: the template's triggers for the event are read ([common][template_triggers], their
+ * call_sfx_script actions) and those scripts run on it again. */
+static void GoCommon_SToggleTriggeredEffects(Ctx *c)
+{
+    uint32_t go = COMP_GO(THIS), on = ARG(1) & 0xff, t = rt_r32(G_MEM, ARG(0)); const char *ev = t ? GS(t) : "";
+    uint32_t fx = w32_callback(c, FX("?FUBI_GetClassSingleton@WorldFx@@KAPAV1@XZ"), 0, 0); if (!fx || !go) RET(0, 2);
+    if (!on) {
+        uint32_t fxm = rt_r32(G_MEM, fx + 4), mgr = fxm ? rt_r32(G_MEM, fxm + 0x8c) : 0, ids[64]; int ni = 0;
+        static uint32_t node[4096]; int n = mgr ? map_nodes(mgr + 0x10, node, 4096) : 0;
+        for (int i = 0; i < n && ni < 64; i++) { uint32_t sc = rt_r32(G_MEM, node[i] + 0x10); if (sc && rt_r32(G_MEM, sc + 0xc) == GO_GOID(go)) ids[ni++] = rt_r32(G_MEM, node[i] + 0xc); }
+        for (int i = 0; i < ni; i++) ext_thiscall(c, FX("?StopScript@WorldFx@@QAEXPBUSFxSID_@@@Z"), fx, 1, &ids[i]);
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: %d triggered effects of %08x paused\n", ni, go);
+        RET(0, 2);
+    }
+    uint32_t data = rt_r32(G_MEM, THIS + 8);                                   /* the template's [common] */
+    if (!data) RET(0, 2);
+    uint32_t esp = c->esp, h = scratch(c, 16), vec = scratch(c, 16); memset(GP(vec), 0, 16);
+    uint32_t ga[2] = {h, sstr(c, "template_triggers")}; ext_thiscall(c, 0x53314bu, data, 2, ga);
+    if (rt_r32(G_MEM, h) || rt_r32(G_MEM, h + 4)) {
+        uint32_t la[2] = {vec, 1}; ext_thiscall(c, FUEL_CHILDREN, h, 2, la);
+        static uint32_t we_unknown; if (!we_unknown) fubi_enum(c, "eWorldEvent", "we_unknown", &we_unknown);
+        for (uint32_t e = rt_r32(G_MEM, vec + 4), end = rt_r32(G_MEM, vec + 8); e && e < end; e += 8) {
+            char cond[160], act[160];
+            if (!fuel_string(c, e, "condition*", cond, sizeof cond)) fuel_string(c, e, "condition", cond, sizeof cond);
+            if (!fuel_string(c, e, "action*", act, sizeof act)) fuel_string(c, e, "action", act, sizeof act);
+            if (!strcasestr(cond, ev) || !strcasestr(act, "call_sfx_script")) continue;
+            char name[64] = ""; const char *q = strchr(act, '"'); if (q) { const char *z = strchr(q + 1, '"'); if (z) snprintf(name, sizeof name, "%.*s", (int)(z - q - 1), q + 1); }
+            if (!*name) continue;
+            uint32_t lesp = c->esp, ra[6] = {sstr(c, name), GO_GOID(go), GO_GOID(go), sstr(c, ""), GO_GOID(go), we_unknown};
+            ext_thiscall(c, FX("?SRunScript@WorldFx@@QAEPBUSFxSID_@@PBDPBUGoid_@@101W4eWorldEvent@@@Z"), fx, 6, ra);
+            scratch_end(c, lesp);
+            if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: triggered effect %s of %08x resumed\n", name, go);
+        }
+        ext_thiscall(c, FUEL_CHILDREN_FREE, vec, 0, 0);
+    }
+    ext_thiscall(c, FUEL_FREE, h, 0, 0); scratch_end(c, esp);
+    RET(0, 2);
+}
 static void GoDb_SRemoveEnchantments(Ctx *c)      /* (Goid target, Goid source, bool now): the engine's own removal by source */
 {
     if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: removing enchantments of %08x from %08x (now %u)\n", ARG(1), ARG(0), ARG(2) & 0xff);
@@ -900,13 +954,6 @@ static void set_items_pending(Ctx *c)
     for (int i = 0; i < 8 && w[i]; i++) set_items_update(c, w[i]);
     busy = 0;
 }
-#define FUEL_HANDLE          0x44375cu   /* FuelHandle::FuelHandle(const char* address) */
-#define FUEL_COPY            0x43b7c4u   /* FuelHandle copy constructor */
-#define FUEL_FREE            0x43b62bu   /* ~FuelHandle */
-#define FUEL_CHILDREN        0x43b69cu   /* ListChildBlocks(vector<FuelHandle>&, depth) */
-#define FUEL_CHILDREN_FREE   0x43c169u
-#define FUEL_CHILD           0x45d3a7u   /* GetChildBlock(FuelHandle& out, const char*) */
-#define FUEL_GET_INT         0x445ae1u   /* Get(const char* key, int&, bool) */
 #define CDB_ENCHANTMENTS     0x5254e4u   /* ContentDb: enchantment template for a fuel block (holder& out, FuelHandle, int) */
 #define ENCH_HOLDER_FREE     0x5275c2u
 #define ENCH_STORAGE_NEW     0x5a2c30u   /* EnchantmentStorage::EnchantmentStorage(template) (0x14 bytes) */
@@ -1443,6 +1490,12 @@ static int override_impl(Ctx *c, uint32_t addr)
         if (open_backpack == item) backpack_close(c); else backpack_open(c, item);
         c->esp += 4 + 4; return 1;
     }
+    case 0x43b01e: {                                  /* an input binder handles a key: the game's, unless switched off */
+        if (!binder_off_since || c->ecx != game_binder) return 0;
+        uint32_t ws = rt_r32(G_MEM, rt_r32(G_MEM, 0x7a05c0u) + 0x20);
+        if (ws == 27 || now_s() - binder_off_since > 10) { binder_off_since = 0; return 0; }   /* ws_sp_nis */
+        c->eax = 0; c->esp += 4 + 4; return 1;
+    }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */
@@ -1511,6 +1564,7 @@ void loa_hook(Ctx *c, uint32_t addr)
  * pieces are revealed and which marker is current are kept in the game's quest database (saved with the game). ---- */
 /* a gpstring with the given text for passing to the game (read-only): made once per distinct text and kept, so that
  * calls made on every interface change or key press do not allocate */
+static uint32_t fmt_s(void) { static uint32_t f; if (!f) f = gstr("%s"); return f; }
 static uint32_t gpstr(Ctx *c, const char *text)
 {
     static struct { char *text; uint32_t g; } cache[2048]; static int n;
@@ -1715,12 +1769,41 @@ static int world_map_visible(Ctx *c) { uint32_t n = gpstr(c, "world_map"); retur
 static void key_toggle_world_map(Ctx *c) { if (world_map_visible(c)) world_map_close(c); else world_map_open(c); RET(1, 0); }
 static void key_redistribute_potions(Ctx *c) { redistribute_potions(c, 0); RET(1, 0); }
 static void key_unsummon(Ctx *c) { end_party_spells(c, 0); RET(1, 0); }
+/* Attack Area (Shift): as the base game's Attack key, at what is under the cursor or else at the ground there */
+static void key_attack_area(Ctx *c)
+{
+    static double last; double t = now_s();
+    if (ui_game && t - last > 0.3) { last = t; ext_thiscall(c, 0x511483u, ui_game, 0, 0); }   /* (key down and up both arrive) */
+    RET(1, 0);
+}
 static void key_untransform(Ctx *c)
 {
     const char *test = getenv("DS_LOA_TRANSFORMTEST");      /* development: Y turns the first party member into <template> and back */
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
     uint32_t m[16];
     if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
+    if (getenv("DS_LOA_FXTEST") && party_members(c, m, 16)) {     /* development: Y spawns a ghost, then pauses/resumes its effects */
+        static uint32_t ghost; static int step;
+        if (!ghost) {
+            uint32_t esp = c->esp, a2[1] = {sstr(c, getenv("DS_LOA_FXTEST"))};
+            uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBD@Z"), 1, a2);
+            uint32_t pl = go_comp(c, m[0], "?GetPlacement@Go@@QAEPAVGoPlacement@@XZ"), pos = ext_thiscall(c, FX("?GetPosition@GoPlacement@@QBEABUSiegePos@@XZ"), pl, 0, 0);
+            ext_thiscall(c, FX("?SetStartingPos@GoCloneReq@@QAEXABUSiegePos@@@Z"), req, 1, &pos);
+            ghost = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0), 1, &req);
+            scratch_end(c, esp);
+            uint32_t ha = GO_ASPECT(m[0]), yes = 1; if (ha) ext_thiscall(c, FX("?SetIsInvincible@GoAspect@@QAEX_N@Z"), ha, 1, &yes);   /* the hero survives it */
+            fprintf(stderr, "loa: test creature %08x\n", ghost); RET(1, 0);
+        }
+        uint32_t g = goid_go(c, ghost), cm = g ? GO_COMMON(g) : 0;
+        if (cm) {
+            uint32_t esp = c->esp, ev = scratch(c, 16); ext_thiscall(c, GPSTR_CTOR, ev, 0, 0);
+            uint32_t fa[3] = {ev, fmt_s(), sstr(c, "WE_ENEMY_SPOTTED")}; w32_callback(c, FX("?AssignF@String@@CAAAV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@AAV2@PBDZZ"), 3, fa);
+            uint32_t sv = c->esp; c->esp -= 12; rt_w32(G_MEM, c->esp + 4, ev); rt_w32(G_MEM, c->esp + 8, step & 1); uint32_t ecx = c->ecx; c->ecx = cm;
+            GoCommon_SToggleTriggeredEffects(c); c->ecx = ecx; c->esp = sv;
+            ext_thiscall(c, 0x48899au, ev, 0, 0); scratch_end(c, esp); step++;
+        }
+        RET(1, 0);
+    }
     if (getenv("DS_LOA_BACKPACKTEST") && party_members(c, m, 16)) {   /* development: Y opens/closes the first backpack carried */
         uint32_t inv = go_comp(c, m[0], "?GetInventory@Go@@QAEPAVGoInventory@@XZ"), it[64]; int n = inv ? item_list_at(c, inv, it, 64, "il_all") : 0;
 
@@ -1803,11 +1886,12 @@ static void publish_keys(Ctx *c, uint32_t uigame)
 {
     static const struct { const char *name; void (*fn)(Ctx *); } keys[] = {
         {"toggle_world_map", key_toggle_world_map}, {"redistribute_potions", key_redistribute_potions},
-        {"unsummon_critter", key_unsummon}, {"untransform_actor", key_untransform},
+        {"unsummon_critter", key_unsummon}, {"untransform_actor", key_untransform}, {"attack_area", key_attack_area},
     };
     uint32_t binder = rt_r32(G_MEM, uigame + 8);                  /* the in-game input binder */
+    game_binder = binder; ui_game = uigame;
     for (unsigned i = 0; i < sizeof keys / sizeof *keys; i++) {
-        static uint32_t thunk[8]; if (!thunk[i]) thunk[i] = w32_thunk_register(keys[i].name, keys[i].fn);
+        static uint32_t thunk[16]; if (!thunk[i]) thunk[i] = w32_thunk_register(keys[i].name, keys[i].fn);
         uint32_t a[5] = {gpstr(c, keys[i].name), thunk[i], 0, uigame, 0x4e1adau};   /* name; functor {method, adjust, object, invoker} */
         ext_thiscall(c, 0x43b0fau, binder, 5, a);
     }

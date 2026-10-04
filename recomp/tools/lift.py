@@ -59,6 +59,7 @@ OVERRIDES = {
     0x005c5515: 'GoAttack::GetAttackRange()',
     0x005a97b8: 'Rules: damage a Go (victim, attacker, weapon, amount, ...)',
     0x004ff967: 'UIInventoryManager: an inventory item is used (right click)',
+    0x0043b01e: 'InputBinder: handle a key',
 }
 
 class Unsupported(Exception): pass
