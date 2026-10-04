@@ -362,6 +362,7 @@ M(s_EnumAttachedSurfaces, 3) ME(DSurface, O_SURF)
     scratch_free(d); RET(DD_OK, 3);
 END
 /* blits */
+static void present(Ctx *c, DSurface *s);
 static void rect_or_full(const DSurface *s, uint32_t r, int32_t *o)
 { if (r) memcpy(o, GP(r), 16); else { o[0] = 0; o[1] = 0; o[2] = (int32_t)U32(s->desc, SD_WIDTH); o[3] = (int32_t)U32(s->desc, SD_HEIGHT); } }
 static void emit_blt(DSurface *d, const int32_t *dr, DSurface *src, const int32_t *sr, uint32_t flags, uint32_t fill)
@@ -379,7 +380,13 @@ M(s_Blt, 6) ME(DSurface, O_SURF)
     rect_or_full(me, dr, a);
     if (flags & DDBLT_COLORFILL) emit_blt(me, a, 0, 0, flags, fx ? rt_r32(G_MEM, fx + 80) : 0);
     else if (flags & DDBLT_DEPTHFILL) emit_blt(me, a, 0, 0, flags, fx ? rt_r32(G_MEM, fx + 80) : 0);
-    else if (src) { rect_or_full(src, ARG(3), b); emit_blt(me, a, src, b, flags, 0); }
+    else if (src) {
+        rect_or_full(src, ARG(3), b); emit_blt(me, a, src, b, flags, 0);
+        /* a copy into the primary surface is on screen at once (the movies show their frames this way, not by flipping):
+           the whole picture copied over is the picture presented */
+        if ((U32(me->desc, SD_CAPS) & DDSCAPS_PRIMARYSURFACE) && a[0] == 0 && a[1] == 0 && a[2] == (int32_t)U32(me->desc, SD_WIDTH) && a[3] == (int32_t)U32(me->desc, SD_HEIGHT) &&
+            b[0] == 0 && b[1] == 0 && b[2] == (int32_t)U32(src->desc, SD_WIDTH) && b[3] == (int32_t)U32(src->desc, SD_HEIGHT)) present(c, src);
+    }
     RET(DD_OK, 6);
 END
 M(s_BltFast, 6) ME(DSurface, O_SURF)
@@ -406,13 +413,17 @@ static void crash_test(Ctx *c)
     if (!strcmp(kind, "abort")) abort();
     if (!strcmp(kind, "hostcrash")) { volatile int *p = (int *)(uintptr_t)8; *p = 1; }
 }
-M(s_Flip, 3) ME(DSurface, O_SURF)
+static void present(Ctx *c, DSurface *s)
+{
     { void w32_crash_heartbeat(int); w32_crash_heartbeat(0); crash_test(c); }
-    DSurface *t = obj(ARG(1), O_SURF), *back = t ? t : (me->nattached ? me->attached[0] : me);
     cmd_cap_wait();
     uint64_t q = w32_deterministic ? 0 : now_us();
-    uint32_t *p = cmd_begin(DSR_PRESENT, 16); p[0] = back->id; p[1] = (uint32_t)q; p[2] = (uint32_t)(q >> 32); p[3] = 1000000; cmd_end();
+    uint32_t *p = cmd_begin(DSR_PRESENT, 16); p[0] = s->id; p[1] = (uint32_t)q; p[2] = (uint32_t)(q >> 32); p[3] = 1000000; cmd_end();
     cmd_frame();
+}
+M(s_Flip, 3) ME(DSurface, O_SURF)
+    DSurface *t = obj(ARG(1), O_SURF), *back = t ? t : (me->nattached ? me->attached[0] : me);
+    present(c, back);
     RET(DD_OK, 3);
 END
 /* lock */

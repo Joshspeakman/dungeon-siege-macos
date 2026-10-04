@@ -183,6 +183,10 @@ int rt_test_run(Ctx *c, uint32_t fn_addr, uint32_t *pc, const char **what)
 }
 uint32_t rt_test_flags(const Ctx *c) { return flags_get(&c->f); }
 
+static volatile char bus_flag;
+void rt_bus_lock(void) { while (__atomic_test_and_set(&bus_flag, __ATOMIC_ACQUIRE)) ; }
+void rt_bus_unlock(void) { __atomic_clear(&bus_flag, __ATOMIC_RELEASE); }
+
 /* cpuid: an Intel Pentium (P54C) without MMX, so code with CPU-specific paths takes its plain x86/x87 path */
 void rt_cpuid(Ctx *c, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
 {

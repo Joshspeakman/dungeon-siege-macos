@@ -20,7 +20,7 @@ echo "== lifting";  "$PY" "$HERE/tools/lift.py" "$EXE" "$HERE/work/analysis.json
 GAME="$(cd "$(dirname "$1")" && pwd)"; IMGS=("=")
 if [ -f "$GAME/Mss32.dll" ]; then
   mkdir -p "$HERE/work/miles"; NIMP=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["imports"]))' "$OUT/image.json")
-  for rel in Mss32.dll system/mss/Mssfast.m3d system/mss/Mp3dec.asi; do
+  for rel in Mss32.dll system/mss/Mssfast.m3d system/mss/Mp3dec.asi BinkW32.dll; do
     tag=$(basename "$rel" | tr . _); [ -f "$GAME/$rel" ] || { echo "missing $GAME/$rel"; exit 1; }
     "$PY" "$HERE/tools/analyze.py" "$GAME/$rel" "$HERE/work/miles/$tag.json" | head -1
     "$PY" "$HERE/tools/lift.py" "$GAME/$rel" "$HERE/work/miles/$tag.json" "$OUT" --tag "$tag" --imp-base "$NIMP" | grep -E 'lifted|internal'
