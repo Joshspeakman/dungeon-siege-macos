@@ -1496,6 +1496,24 @@ static int override_impl(Ctx *c, uint32_t addr)
         if (ws == 27 || now_s() - binder_off_since > 10) { binder_off_since = 0; return 0; }   /* ws_sp_nis */
         c->eax = 0; c->esp += 4 + 4; return 1;
     }
+    case 0x62e80b: case 0x62eae8: case 0x62ee57: {    /* the sound system starts a sample (2D, positional) or stream: */
+        /* the expansion's Voice Overs options: spoken dialogue (s_v_*) is left out, or plays at the Voice Over volume
+         * (the sound type's volume, at +0xfc + 4 * type, is read when a sound starts) */
+        static int inside; if (inside) return 0;
+        int nargs = addr == 0x62e80bu ? 4 : addr == 0x62eae8u ? 7 : 3;
+        uint32_t nm = ARG(0), t = nm ? rt_r32(G_MEM, nm) : 0; const char *name = t ? GS(t) : "";
+        uint32_t type = addr == 0x62e80bu ? ARG(2) : addr == 0x62eae8u ? ARG(5) : ARG(1);
+        if (getenv("DS_SOUNDLOG")) fprintf(stderr, "loa: sound %08x %s type %u\n", addr, name, type);
+        if (strncasecmp(name, "s_v_", 4) || type > 2) return 0;
+        if (!opt.loaded) opt_load();
+        if (!opt.vo) { c->eax = addr == 0x62ee57u ? 0 : 0xffffffffu; c->esp += 4 + 4 * (uint32_t)nargs; return 1; }
+        uint32_t slot = c->ecx + 0xfc + 4 * type, keep = rt_r32(G_MEM, slot), a[7];
+        for (int i = 0; i < nargs; i++) a[i] = ARG(i);
+        rt_w32(G_MEM, slot, (uint32_t)(opt.vo_volume * 127 / 100));
+        inside = 1; c->eax = ext_thiscall(c, addr, c->ecx, nargs, a); inside = 0;
+        rt_w32(G_MEM, slot, keep);
+        c->esp += 4 + 4 * (uint32_t)nargs; return 1;
+    }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */
