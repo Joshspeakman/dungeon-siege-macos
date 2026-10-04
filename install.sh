@@ -64,6 +64,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.role-playing-games</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocalNetworkUsageDescription</key><string>Dungeon Siege looks for and hosts multiplayer games on your local network.</string>
 </dict></plist>
 PLIST
 I="$(mktemp -d)"

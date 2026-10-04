@@ -420,6 +420,12 @@ IMPL(kernel32, UnhandledExceptionFilter)
     uint32_t rec = rt_r32(G_MEM, ARG(0));
     fprintf(stderr, "recomp: unhandled exception %08x at %08x (info %08x %08x), thread %x\n", rt_r32(G_MEM, rec), rt_r32(G_MEM, rec + 12),
             rt_r32(G_MEM, rec + 20), rt_r32(G_MEM, rec + 24), w32_tid(c));
+    {   /* the game is about to stop: leave a crash report with every thread's stack */
+        extern const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint32_t guest_pc);
+        char why[160]; snprintf(why, sizeof why, "unhandled exception %08x (info %08x %08x)", rt_r32(G_MEM, rec), rt_r32(G_MEM, rec + 20), rt_r32(G_MEM, rec + 24));
+        const char *path = w32_crash_report("crash", why, c, rt_r32(G_MEM, rec + 12));
+        if (path) fprintf(stderr, "recomp: crash report %s\n", path);
+    }
     RET(1, 1);
 }
 IMPL(kernel32, IsDebuggerPresent) { RET(0, 0); }

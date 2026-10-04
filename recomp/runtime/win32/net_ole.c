@@ -1,5 +1,10 @@
-/* WSOCK32 (multiplayer: reports no network for now) and OLE32 basics. */
+/* WSOCK32 (the host name and addresses the multiplayer screens use) and OLE32 basics. */
 #include "w32.h"
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netdb.h>
+#include <unistd.h>
 IMPL(wsock32, ord115)                                                 /* WSAStartup(version, WSADATA*) */
 {
     uint32_t d = ARG(1); memset(GP(d), 0, 400);
@@ -9,8 +14,49 @@ IMPL(wsock32, ord115)                                                 /* WSAStar
     RET(0, 2);
 }
 IMPL(wsock32, ord116) { RET(0, 0); }                                  /* WSACleanup */
-IMPL(wsock32, ord52) { RET(0, 1); }                                   /* gethostbyname: no network */
-IMPL(wsock32, ord57) { if (ARG(1) >= 10) { strcpy((char *)GP(ARG(0)), "localhost"); RET(0, 2); } RET(0xffffffffu, 2); }   /* gethostname */
+static void local_host_name(char *out, size_t cap)
+{
+    char h[256] = "localhost"; gethostname(h, sizeof h); h[sizeof h - 1] = 0;
+    char *dot = strchr(h, '.'); if (dot && !strcmp(dot, ".local")) *dot = 0;   /* Windows-style short name */
+    snprintf(out, cap, "%s", h);
+}
+/* gethostbyname: one hostent per thread, as on Windows. Our own name gives every IPv4 interface address (what a host
+ * shows its players); other names go to the resolver. Layout: hostent{h_name, h_aliases, h_addrtype, h_length,
+ * h_addr_list}, then the pointer arrays, addresses and name. */
+IMPL(wsock32, ord52)
+{
+    static __thread uint32_t blk; if (!blk) blk = heap_alloc(w32_process_heap, 8, 1024);
+    char name[256]; snprintf(name, sizeof name, "%s", GS(ARG(0))); char me[256]; local_host_name(me, sizeof me);
+    uint32_t addrs[16]; int n = 0;
+    if (!strcasecmp(name, me) || !*name) {
+        struct ifaddrs *ifs = 0;
+        if (!getifaddrs(&ifs)) {
+            for (struct ifaddrs *i = ifs; i && n < 16; i = i->ifa_next)
+                if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP) && !(i->ifa_flags & IFF_LOOPBACK))
+                    addrs[n++] = ((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr;
+            freeifaddrs(ifs);
+        }
+        if (!n) addrs[n++] = htonl(INADDR_LOOPBACK);
+    } else {
+        struct addrinfo hint = {0}, *res = 0; hint.ai_family = AF_INET;
+        if (getaddrinfo(name, 0, &hint, &res)) RET(0, 1);
+        for (struct addrinfo *r = res; r && n < 16; r = r->ai_next) addrs[n++] = ((struct sockaddr_in *)r->ai_addr)->sin_addr.s_addr;
+        freeaddrinfo(res);
+        if (!n) RET(0, 1);
+    }
+    uint32_t list = blk + 16, alias = list + 4 * 17, data = alias + 4, nm = data + 4 * 16;
+    for (int i = 0; i < n; i++) { rt_w32(G_MEM, data + 4 * (uint32_t)i, addrs[i]); rt_w32(G_MEM, list + 4 * (uint32_t)i, data + 4 * (uint32_t)i); }
+    rt_w32(G_MEM, list + 4 * (uint32_t)n, 0); rt_w32(G_MEM, alias, 0);
+    snprintf((char *)GP(nm), 256, "%s", name);
+    rt_w32(G_MEM, blk, nm); rt_w32(G_MEM, blk + 4, alias); rt_w16(G_MEM, blk + 8, AF_INET); rt_w16(G_MEM, blk + 10, 4); rt_w32(G_MEM, blk + 12, list);
+    RET(blk, 1);
+}
+IMPL(wsock32, ord57)                                                  /* gethostname(buf, len) */
+{
+    char h[256]; local_host_name(h, sizeof h);
+    if (strlen(h) + 1 > ARG(1)) RET(0xffffffffu, 2);
+    strcpy((char *)GP(ARG(0)), h); RET(0, 2);
+}
 IMPL(wsock32, ord10)                                                  /* inet_addr */
 {
     unsigned a, b, c2, d; if (sscanf(GS(ARG(0)), "%u.%u.%u.%u", &a, &b, &c2, &d) == 4) RET((d << 24) | (c2 << 16) | (b << 8) | a, 1);
@@ -22,6 +68,9 @@ IMPL(ole32, CoUninitialize) { RET(0, 0); }
 IMPL(ole32, CoCreateInstance)
 {
     uint32_t clsid = ARG(0), out = ARG(4);
+    uint32_t w32_dpnet_create(uint32_t clsid_first_dword);
+    uint32_t obj = w32_dpnet_create(rt_r32(G_MEM, clsid));           /* DirectPlay 8 client, server, address */
+    if (obj) { if (out) rt_w32(G_MEM, out, obj); RET(0, 5); }
     fprintf(stderr, "w32: CoCreateInstance({%08x-...}) -> class not registered\n", rt_r32(G_MEM, clsid));
     if (out) rt_w32(G_MEM, out, 0);
     RET(0x80040154u, 5);
