@@ -201,3 +201,4 @@ void rt_exception(Ctx *c, uint32_t pc, uint32_t code)
 
 /* weak default without the Win32 layer: no native features */
 __attribute__((weak)) void rt_hook(Ctx *c, uint32_t addr) { (void)c; (void)addr; }
+__attribute__((weak)) int rt_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }

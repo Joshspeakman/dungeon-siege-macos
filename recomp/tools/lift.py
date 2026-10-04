@@ -21,16 +21,29 @@ CC = {'o': 'CC_O', 'no': 'CC_NO', 'b': 'CC_B', 'ae': 'CC_AE', 'e': 'CC_E', 'ne':
 HOOKS = {
     0x0059000f: 'mood loaded: scale fog and frustum (draw distance)',
     0x0061d06c: 'Skrit compiler message (this, level, format, ...): printed with DS_SKRITLOG=1',
+    0x004acb46: 'FuBi enum spec constructed: Legends of Aranna extends eJobAbstractType',
+    0x005d1fcf: 'GoMind template jobs loaded: Legends of Aranna adds jat_approach',
+    0x004036a8: 'FuBi enum spec constructed (second copy): Legends of Aranna extends eQueryTrait',
 }
 JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd', 'hlt', 'cli', 'sti', 'int1', 'into',
         'int', 'aaa', 'aas', 'aam', 'aad', 'daa', 'das', 'salc', 'les', 'lds', 'retf', 'ljmp', 'lcall', 'arpl', 'bound',
         'bndldx', 'bndstx', 'bndmov', 'bndcl', 'bndcu', 'bndmk', 'bnd call', 'bnd jmp', 'bnd ret', 'fbstp', 'fbld',
         'ud2', 'int3', 'sysenter', 'syscall', 'lock', 'wait'}
 
+# Functions a native implementation can take over (runtime/win32/hooks.c rt_override): at the function's first
+# instruction the runtime may perform the whole call (including the return) itself.
+OVERRIDES = {
+    0x005cfa0d: 'ToString(eJobAbstractType)',
+    0x005cfa1e: 'FromString(const char*, eJobAbstractType&)',
+    0x005cfa33: 'job type flag mask',
+    0x0051f739: 'ToString(eQueryTrait)',
+    0x005e179b: 'AIQuery::Is(Go const*, Go const*, eQueryTrait)',
+}
+
 class Unsupported(Exception): pass
 
 class Lifter:
-    hooks = {}
+    hooks = {}; overrides = {}
     def __init__(self, exe, analysis):
         self.pe = PE(exe); self.TLO, self.THI, self.code = code_range(self.pe)
         self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32); self.md.detail = True
@@ -230,6 +243,8 @@ class Lifter:
                 body = re.sub(r'SPILL; ((?:f_[0-9a-f]{8}\(c\)|rt_call\(c, t\)|rt_import\(c, \d+\)); )?return;', lambda m: 'rt_seh_pop(&seh_pad); ' + m.group(0), body)
             if va in self.hooks:      # native features: runtime/win32/hooks.c runs before this instruction
                 body = 'SPILL; rt_hook(c, 0x%08xu); RELOAD; /* hook: %s */ ' % (va, self.hooks[va]) + body
+            if va == f and va in self.overrides:   # a native implementation may perform the whole call
+                body = 'SPILL; if (rt_override(c, 0x%08xu)) return; RELOAD; /* override: %s */ ' % (va, self.overrides[va]) + body
             out.append('#line %d "x86"\n    /* %08x: %s %s */ %s\n' % (va, va, i.mnemonic, i.op_str, body))   # debug line = guest address
             nxt = va + i.size
             if self.falls_through(i) and (k + 1 == len(order) or order[k + 1] != nxt):
@@ -618,6 +633,7 @@ def main():
     L.imp_index = {va: a.imp_base + k for k, (va, _) in enumerate(L.imports)}
     L.illegal_seh = bool(a.tag)
     L.hooks = {} if a.tag else dict(HOOKS)
+    L.overrides = {} if a.tag else dict(OVERRIDES)
     # development: DS_TRACE_HOOKS="0x48bf51,0x713158" adds hooks that log registers and stack arguments (DS_HOOKTRACE=1)
     for h in filter(None, os.environ.get('DS_TRACE_HOOKS', '').split(',')):
         if not a.tag: L.hooks.setdefault(int(h, 16), 'trace')
