@@ -132,7 +132,23 @@ static void GoMind_RSApproach(Ctx *c)                /* (Go target, float distan
     }
     RET(0, 5);
 }
-static void GoMind_RSCopyMind(Ctx *c) { RET(0, 1); }        /* minds keep their own template settings */
+/* GoMind::RSCopyMind(const GoMind&): a doppelganger puts its own mind into the copy of the hero it becomes. The settings
+ * a mind exposes are carried over: its orders (combat, movement, focus, disposition), whether it may attack and be
+ * attacked, and its team; ranges and jobs stay those of the body's template. */
+static void GoMind_RSCopyMind(Ctx *c)
+{
+    uint32_t from = ARG(0), v;
+#define COPY(get, set) do { v = ext_thiscall(c, FX(get), from, 0, 0); ext_thiscall(c, FX(set), THIS, 1, &v); } while (0)
+    COPY("?GetCombatOrders@GoMind@@QBE?AW4eCombatOrders@@XZ", "?RSSetCombatOrders@GoMind@@QAEXW4eCombatOrders@@@Z");
+    COPY("?GetMovementOrders@GoMind@@QBE?AW4eMovementOrders@@XZ", "?RSSetMovementOrders@GoMind@@QAEXW4eMovementOrders@@@Z");
+    COPY("?GetFocusOrders@GoMind@@QBE?AW4eFocusOrders@@XZ", "?RSSetFocusOrders@GoMind@@QAEXW4eFocusOrders@@@Z");
+    COPY("?GetDispositionOrders@GoMind@@QBE?AW4eActorDisposition@@XZ", "?RSSetDispositionOrders@GoMind@@QAEXW4eActorDisposition@@@Z");
+    v = ext_thiscall(c, FX("?GetMayAttack@GoMind@@QBE_NXZ"), from, 0, 0) & 0xff; ext_thiscall(c, FX("?SetMayAttack@GoMind@@QAEX_N@Z"), THIS, 1, &v);
+    v = ext_thiscall(c, FX("?GetMayBeAttacked@GoMind@@QBE_NXZ"), from, 0, 0) & 0xff; ext_thiscall(c, FX("?SetMayBeAttacked@GoMind@@QAEX_N@Z"), THIS, 1, &v);
+    COPY("?GetAllignedTeam@GoMind@@QBEHXZ", "?SetAllignedTeam@GoMind@@QAEXH@Z");
+#undef COPY
+    RET(0, 1);
+}
 
 /* ---- AIQuery ---- */
 static void AIQuery_GetEnemiesOfGoInSphere(Ctx *c)   /* (SiegePos const& centre, float radius, Go const* of, GopColl& out) */
