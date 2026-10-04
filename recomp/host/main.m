@@ -120,7 +120,7 @@ static void *render_thread(void *arg)
 // DS_SCRIPT="1900:click:400,150;2100:shot:/tmp/a.png;2200:key:13" : at a presented frame, act through the same message
 // path as real input. Coordinates are in the game's current display mode.
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[512]; } Act;   // at > 0: seconds from start
-static Act acts[64]; static int nacts;
+static Act acts[256]; static int nacts;
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
@@ -129,7 +129,7 @@ static void parse_script(void)
 {
     const char *e = getenv("DS_SCRIPT"); if (!e) return;
     char *s = strdup(e), *save, *tok = strtok_r(s, ";", &save);
-    while (tok && nacts < 64) {
+    while (tok && nacts < 256) {
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         int ok = tok[0] == '@' ? sscanf(tok + 1, "%lf:%7[a-z]:%599[^\n]", &a->at, kind, rest) : sscanf(tok, "%u:%7[a-z]:%599[^\n]", &a->frame, kind, rest);
         if (tok[0] == '@') a->frame = 0xffffffffu;
@@ -159,9 +159,30 @@ static void motion_tick(void)
 }
 /* "type" action: each character as a keyDown/keyUp NSEvent sent to the window; {esc} {enter} {bs} for keys */
 static void type_text(NSString *text);
+/* DS_CMDFILE=<path> (test mode): lines appended to the file while the game runs ("click:400,290", "type:Name",
+ * "key:13", "shot:/tmp/a.png", ...) are carried out from the next frame on: for tests driven from outside */
+static void cmdfile_poll(uint32_t fno)
+{
+    static const char *path; static off_t pos; static int init;
+    if (!init) { init = 1; path = getenv("DS_CMDFILE"); }
+    if (!path || fno % 15) return;
+    FILE *f = fopen(path, "r"); if (!f) return;
+    fseeko(f, pos, SEEK_SET); char line[700];
+    while (nacts < 256 && fgets(line, sizeof line, f)) {
+        size_t l = strlen(line); if (!l || line[l - 1] != '\n') break;       /* a line still being written */
+        pos += (off_t)l; line[l - 1] = 0;
+        Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
+        if (sscanf(line, "%7[a-z]:%599[^\n]", kind, rest) < 1 || !kind[0]) continue;
+        memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
+        if (!strcmp(kind, "shot") || !strcmp(kind, "type")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+        nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
+    }
+    fclose(f);
+}
 static const char *script_tick(uint32_t fno)       /* returns a screenshot path if one is due */
 {
     const char *shot = 0;
+    cmdfile_poll(fno);
     static double t0; double now = CACurrentMediaTime(); if (!t0) t0 = now;
     for (int k = 0; k < nacts; k++) if (acts[k].at > 0 && acts[k].frame == 0xffffffffu && now - t0 >= acts[k].at) acts[k].frame = fno;   /* timed steps start now */
     motion_tick();

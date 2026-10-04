@@ -738,7 +738,7 @@ static void ui_hide_group(Ctx *c, const char *group)
 static int is_transformed(Ctx *c, uint32_t go);
 static int party_members(Ctx *c, uint32_t *out, int max);
 static void restore_transformation(Ctx *c, uint32_t go);
-static struct { int rings, vo; int vo_volume; int loaded; } opt = {1, 1, 85, 0};   /* the expansion's own options */
+static struct { int rings, vo; int vo_volume; int loaded; } opt = {1, 1, 85, 0};   /* the expansion's own options (volume 0-127, as the engine's) */
 static void opt_load(void);
 static void apply_rings(Ctx *c);
 static void sell_button_text(Ctx *c);
@@ -781,13 +781,25 @@ static const char *opt_path(void)
 static void opt_load(void)
 {
     opt.loaded = 1; FILE *f = *opt_path() ? fopen(opt_path(), "r") : 0; char line[128];
-    while (f && fgets(line, sizeof line, f)) { sscanf(line, "selection_rings = %d", &opt.rings); sscanf(line, "use_voiceovers = %d", &opt.vo); sscanf(line, "voiceover_volume = %d", &opt.vo_volume); }
-    if (f) fclose(f);
+    if (!f) {               /* not set here yet: as in the profile's prefs.gas (where the original keeps them; e.g. a copied profile) */
+        char host[2048], v[16];
+        if (!w32_host_path("C:\\Users\\player\\Documents\\Dungeon Siege LOA\\prefs.gas", host, sizeof host, 0) && (f = fopen(host, "r"))) {
+            while (fgets(line, sizeof line, f)) {
+                if (sscanf(line, " use_voiceovers = %15[a-z]", v) == 1) opt.vo = !strcmp(v, "true");
+                sscanf(line, " sound_voiceover_volume = %d", &opt.vo_volume);
+            }
+            fclose(f);
+        }
+        return;
+    }
+    while (fgets(line, sizeof line, f)) { sscanf(line, "selection_rings = %d", &opt.rings); sscanf(line, "use_voiceovers = %d", &opt.vo); sscanf(line, "sound_voiceover_volume = %d", &opt.vo_volume); }
+    fclose(f);
+    if (opt.vo_volume < 0 || opt.vo_volume > 127) opt.vo_volume = 85;
 }
 static void opt_save(void)
 {
     FILE *f = *opt_path() ? fopen(opt_path(), "w") : 0; if (!f) return;
-    fprintf(f, "selection_rings = %d\nuse_voiceovers = %d\nvoiceover_volume = %d\n", opt.rings, opt.vo, opt.vo_volume); fclose(f);
+    fprintf(f, "selection_rings = %d\nuse_voiceovers = %d\nsound_voiceover_volume = %d\n", opt.rings, opt.vo, opt.vo_volume); fclose(f);
 }
 static void apply_rings(Ctx *c)                          /* the party's selection rings */
 {
@@ -811,7 +823,7 @@ static void options_audio_page(Ctx *c, int page)
     if (page == 2) {
         ui_text(c, "button_vosounds_text", "options_audio", opt.vo ? "On" : "Off");
         uint32_t esp = c->esp, f[2] = {sstr(c, "slider_voiceovervolume"), sstr(c, "options_audio")}, w = ext_thiscall(c, UI_FIND_WINDOW, UISHELL, 2, f);
-        uint32_t v = (uint32_t)opt.vo_volume; if (w) ext_thiscall(c, 0x6f92a7u, w, 1, &v);   /* UISlider::SetValue */
+        uint32_t v = (uint32_t)((opt.vo_volume * 100 + 63) / 127); if (w) ext_thiscall(c, 0x6f92a7u, w, 1, &v);   /* UISlider::SetValue (0-100) */
         scratch_end(c, esp);
     }
 }
@@ -821,7 +833,7 @@ static int options_message(Ctx *c, const char *m, uint32_t window)
     if (!strcmp(m, "show_options_audio") || !strcmp(m, "options_audio_back") || !strcmp(m, "default_options_audio")) options_audio_page(c, 1);
     else if (!strcmp(m, "options_audio_more")) options_audio_page(c, 2);
     else if (!strcmp(m, "toggle_vosounds")) { opt.vo = !opt.vo; ui_text(c, "button_vosounds_text", "options_audio", opt.vo ? "On" : "Off"); }
-    else if (!strcmp(m, "slider_change_volume_voiceover")) { if (window) opt.vo_volume = (int)rt_r32(G_MEM, window + 0x1e8); }
+    else if (!strcmp(m, "slider_change_volume_voiceover")) { if (window) opt.vo_volume = ((int)rt_r32(G_MEM, window + 0x1e8) * 127 + 50) / 100; }
     else if (!strcmp(m, "show_options_game") || !strcmp(m, "options_game_back")) ui_group(c, "options_game_selection_rings", 0);
     else if (!strcmp(m, "options_game_more")) { ui_group(c, "options_game_selection_rings", 1); ui_text(c, "button_selection_rings_text", "options_game", opt.rings ? "On" : "Off"); }
     else if (!strcmp(m, "toggle_selection_rings")) { opt.rings = !opt.rings; ui_text(c, "button_selection_rings_text", "options_game", opt.rings ? "On" : "Off"); }
@@ -1567,7 +1579,7 @@ static int override_impl(Ctx *c, uint32_t addr)
         if (!opt.vo) { c->eax = addr == 0x62ee57u ? 0 : 0xffffffffu; c->esp += 4 + 4 * (uint32_t)nargs; return 1; }
         uint32_t slot = c->ecx + 0xfc + 4 * type, keep = rt_r32(G_MEM, slot), a[7];
         for (int i = 0; i < nargs; i++) a[i] = ARG(i);
-        rt_w32(G_MEM, slot, (uint32_t)(opt.vo_volume * 127 / 100));
+        rt_w32(G_MEM, slot, (uint32_t)opt.vo_volume);
         inside = 1; c->eax = ext_thiscall(c, addr, c->ecx, nargs, a); inside = 0;
         rt_w32(G_MEM, slot, keep);
         c->esp += 4 + 4 * (uint32_t)nargs; return 1;
