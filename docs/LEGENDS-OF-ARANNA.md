@@ -64,7 +64,10 @@ Not done yet, or simplified:
 - Options: the expansion's extra pages work (Enable Selection Rings, Voice Overs, Voice Over Volume) and are
   remembered, but Voice Overs and Voice Over Volume do not yet change how dialogue is played (it plays at the
   Voice Volume).
-- Multiplayer with the expansion has not been tested.
+- Multiplayer: hosting a Legends of Aranna game, creating or importing a character and starting in Arhok works
+  (tested on one Mac); playing together with other players has not been tested yet. In the staging area,
+  "Import DS Character..." offers your Dungeon Siege characters and "Import DS LOA Character..." your Legends of
+  Aranna ones.
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
