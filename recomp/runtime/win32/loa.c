@@ -4,6 +4,8 @@
  * Names are the C++ decorated names the scripts' compiler binds to; the signatures follow the calls in the
  * expansion's scripts. */
 #include "ext.h"
+#include "tank.h"
+#include <dirent.h>
 #include <math.h>
 
 /* ---- base engine internals (GOG 1.11.1) ---- */
@@ -313,8 +315,6 @@ static void OverheadMap_Singleton(Ctx *c) { RETC(singleton(&g_overhead)); }
 static void TransformationManager_STransformMe(Ctx *c) { RET(0, 3); }
 static void TransformationManager_SUnTransformMe(Ctx *c) { RET(0, 1); }
 static void TransformationManager_GetNewTemplateName(Ctx *c) { RET(singleton(&g_empty_string), 1); }   /* an empty string */
-static void OverheadMap_RS2(Ctx *c) { RET(0, 2); }
-static void OverheadMap_RS3(Ctx *c) { RET(0, 3); }
 static void Player_GetParty(Ctx *c)
 {
     uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
@@ -460,6 +460,8 @@ static int ui_wrap(Ctx *c, uint32_t fn, int nargs)
     c->esp += 4 + 4 * (uint32_t)nargs; return 1;
 }
 
+static void world_map_open(Ctx *c);
+static void world_map_close(Ctx *c);
 int loa_override(Ctx *c, uint32_t addr)
 {
     switch (addr) {
@@ -479,6 +481,8 @@ int loa_override(Ctx *c, uint32_t addr)
     case 0x4f0b34: {                                  /* the in-game interface's commands (UI "notify" messages) */
         uint32_t p = rt_r32(G_MEM, ARG(0)); const char *m = p ? GS(p) : "";
         if (!strcmp(m, "redistribute_potions")) redistribute_potions(c, 0);
+        else if (!strcmp(m, "activate_world_map")) world_map_open(c);
+        else if (!strcmp(m, "exit_world_map")) world_map_close(c);
         else return 0;                                /* the base engine's own commands */
         c->esp += 4 + 8; return 1;
     }
@@ -543,6 +547,158 @@ void loa_hook(Ctx *c, uint32_t addr)
         break;
     }
     }
+}
+
+/* ---- the overhead world map (Legends of Aranna): the map's info/overheadmap.gas lists the pieces of the world
+ * image revealed as the party explores (256x256 textures at x,y on a 1024x768 map) and the named area markers. Which
+ * pieces are revealed and which marker is current are kept in the game's quest database (saved with the game). ---- */
+#define GPSTR_CTOR 0x42aea8u
+static uint32_t gpstr(Ctx *c, const char *text)          /* a heap gpstring with the given text (kept) */
+{
+    uint32_t g = heap_alloc(w32_process_heap, 8, 16); ext_thiscall(c, GPSTR_CTOR, g, 0, 0);
+    static uint32_t fmt; if (!fmt) fmt = gstr("%s");
+    uint32_t t = gstr(text), a[3] = {g, fmt, t};
+    w32_callback(c, FX("?AssignF@String@@CAAAV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@AAV2@PBDZZ"), 3, a);
+    return g;
+}
+static GasBlock *omap; static char omap_for[128];
+static GasBlock *wmap_settings(void)                     /* ui:config:worldmap_settings (font, colours, marker texture) */
+{
+    extern char w32_game_layer[1024]; static GasBlock *g; static int tried;
+    if (!tried) {
+        tried = 1; char dir[1100], path[1400]; snprintf(dir, sizeof dir, "%s/Resources", w32_game_layer);
+        DIR *d = opendir(dir); struct dirent *e;
+        while (d && !g && (e = readdir(d))) {
+            if (!strcasestr(e->d_name, ".dsres")) continue;
+            snprintf(path, sizeof path, "%s/%s", dir, e->d_name); uint8_t *data; size_t n;
+            if (!tank_read(path, "ui/config/worldmap_settings/worldmap_settings.gas", &data, &n)) {
+                char *t = malloc(n + 1); memcpy(t, data, n); t[n] = 0; free(data); g = gas_child(gas_parse(t), "worldmap_settings"); free(t);
+            }
+        }
+        if (d) closedir(d);
+    }
+    return g;
+}
+static GasBlock *overheadmap(Ctx *c)                      /* the current map's overhead map description */
+{
+    extern char w32_game_layer[1024];
+    uint32_t wm = w32_callback(c, FX("?FUBI_GetClassSingleton@WorldMap@@CAPAV1@XZ"), 0, 0);
+    uint32_t np = wm ? rt_r32(G_MEM, wm + 4) : 0; const char *map = np ? GS(np) : "";
+    if (omap && !strcmp(map, omap_for)) return omap;
+    gas_free(omap); omap = 0; snprintf(omap_for, sizeof omap_for, "%s", map);
+    char dir[1100], path[1400], inside[256]; snprintf(dir, sizeof dir, "%s/Maps", w32_game_layer);
+    snprintf(inside, sizeof inside, "world/maps/%s/info/overheadmap.gas", map);
+    DIR *d = opendir(dir); struct dirent *e;
+    while (d && !omap && (e = readdir(d))) {
+        if (!strcasestr(e->d_name, ".dsmap")) continue;
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        uint8_t *data; size_t n;
+        if (!tank_read(path, inside, &data, &n)) { char *t = malloc(n + 1); memcpy(t, data, n); t[n] = 0; free(data); omap = gas_child(gas_parse(t), "overheadmap"); free(t); }
+    }
+    if (d) closedir(d);
+    return omap;
+}
+static void quest_set(Ctx *c, const char *key, int value, int is_bool)
+{
+    uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0), any = w32_callback(c, FX("?GetAnyGoid@Goid_@@CAPBU1@XZ"), 0, 0);
+    static uint32_t cat; if (!cat) cat = gstr("dsx_overheadmap");
+    uint32_t a[4] = {any, cat, gstr(key), (uint32_t)value};
+    ext_thiscall(c, is_bool ? FX("?SSetQuestBool@GoDb@@QAEXPBUGoid_@@PBD1_N@Z") : FX("?SSetQuestInt@GoDb@@QAEXPBUGoid_@@PBD1H@Z"), godb, 4, a);
+}
+static int quest_get(Ctx *c, const char *key, int is_bool)    /* written for every player (AnyGoid), read for the screen hero */
+{
+    uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+    uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
+    uint32_t hero = server ? ext_thiscall(c, FX("?GetScreenHero@Server@@QAEPAVGo@@XZ"), server, 0, 0) : 0, any = hero ? GO_GOID(hero) : 0;
+    if (!godb || !any) return 0;
+    static uint32_t cat; if (!cat) cat = gstr("dsx_overheadmap");
+    uint32_t esp = c->esp, t = scratch(c, 64); snprintf((char *)GP(t), 64, "%s", key);
+    uint32_t a[3] = {any, cat, t};
+    int r = (int)ext_thiscall(c, is_bool ? FX("?GetQuestBool@GoDb@@QBE_NPBUGoid_@@PBD1@Z") : FX("?GetQuestInt@GoDb@@QBEHPBUGoid_@@PBD1@Z"), godb, 3, a);
+    scratch_end(c, esp); return is_bool ? (r & 0xff) : r;
+}
+static const char *gpstr_text(uint32_t g) { uint32_t p = g ? rt_r32(G_MEM, g) : 0; return p ? GS(p) : ""; }
+static void OverheadMap_RSSetCurrentBackground(Ctx *c) { RET(0, 2); }       /* one background (mainland) */
+static void OverheadMap_RSUpdateCurrentAreaMarker(Ctx *c)                    /* (const gpstring& marker, Goid) */
+{
+    GasBlock *m = gas_child(overheadmap(c), "markers"); const char *name = gpstr_text(ARG(0));
+    for (int i = 0; m && i < m->nchild; i++) if (!strcasecmp(m->child[i]->name, name)) quest_set(c, "current_marker", i + 1, 0);
+    RET(0, 2);
+}
+static void OverheadMap_RSUpdateMapPieceVisibility(Ctx *c)                   /* (const gpstring& piece, bool visible, Goid) */
+{
+    char key[96]; snprintf(key, sizeof key, "piece_%s", gpstr_text(ARG(0))); quest_set(c, key, ARG(1) & 0xff, 1);
+    RET(0, 3);
+}
+/* a window on the world map interface: texture (or text) at a rectangle given in the map's 1024x768 coordinates */
+static uint32_t wmap_window(Ctx *c, const char *type, const char *name, int x0, int y0, int x1, int y1)
+{
+    uint32_t sh = UISHELL, tp = gpstr(c, type);
+    uint32_t w = ext_thiscall(c, FX("?CreateDefaultWindowOfType@UIShell@@QAEPAVUIWindow@@ABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), sh, 1, &tp);
+    if (!w) return 0;
+    uint32_t nm = gpstr(c, name); ext_thiscall(c, FX("?SetName@UIWindow@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), w, 1, &nm);
+    int W = (int)ext_thiscall(c, FX("?GetScreenWidth@UIShell@@QBEHXZ"), sh, 0, 0), H = (int)ext_thiscall(c, FX("?GetScreenHeight@UIShell@@QBEHXZ"), sh, 0, 0);
+    uint32_t r = ext_thiscall(c, FX("?GetRect@UIWindow@@QAEAAUGRect@@XZ"), w, 0, 0);
+    rt_w32(G_MEM, r, (uint32_t)(x0 * W / 1024)); rt_w32(G_MEM, r + 4, (uint32_t)(y0 * H / 768));
+    rt_w32(G_MEM, r + 8, (uint32_t)(x1 * W / 1024)); rt_w32(G_MEM, r + 12, (uint32_t)(y1 * H / 768));
+    uint32_t order = 5; ext_thiscall(c, FX("?SetDrawOrder@UIWindow@@QAEXH@Z"), w, 1, &order);
+    uint32_t a[3] = {w, gpstr(c, "world_map"), 1};
+    ext_thiscall(c, FX("?AddWindowToInterface@UIShell@@QAEXPAVUIWindow@@ABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), sh, 3, a);
+    uint32_t on = 1; ext_thiscall(c, rt_r32(G_MEM, rt_r32(G_MEM, w) + 0x48), w, 1, &on);
+    return w;
+}
+static void wmap_texture(Ctx *c, uint32_t w, const char *tex)
+{
+    uint32_t on = 1; ext_thiscall(c, FX("?SetHasTexture@UIWindow@@QAEX_N@Z"), w, 1, &on);
+    uint32_t uv = ext_thiscall(c, FX("?GetUVRect@UIWindow@@QBEABVUINormalizedRect@@XZ"), w, 0, 0);   /* the whole texture */
+    rt_wf64(G_MEM, uv, 0); rt_wf64(G_MEM, uv + 8, 1); rt_wf64(G_MEM, uv + 16, 0); rt_wf64(G_MEM, uv + 24, 1);   /* left, right, top, bottom (doubles) */
+    uint32_t a[2] = {gpstr(c, tex), 0}; ext_thiscall(c, FX("?FUBI_RENAME_LoadTexture@UIWindow@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), w, 2, a);
+    uint32_t one = fbits(1.0f), off = 0;
+    ext_thiscall(c, FX("?SetAlpha@UIWindow@@QAEXM@Z"), w, 1, &one);
+    ext_thiscall(c, FX("?SetBackgroundFill@UIWindow@@QAEX_N@Z"), w, 1, &off);
+    uint32_t white = 0xffffffffu; ext_thiscall(c, FX("?SetBackgroundColor@UIWindow@@QAEXI@Z"), w, 1, &white);
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: texture %s -> index %u\n", tex, ext_thiscall(c, FX("?GetTextureIndex@UIWindow@@QBEIXZ"), w, 0, 0));
+}
+static void world_map_open(Ctx *c)
+{
+    GasBlock *om = overheadmap(c); if (!om || !UISHELL) return;
+    if (getenv("DS_LOA_MAPTEST")) { quest_set(c, "piece_arhok", 1, 1); quest_set(c, "piece_beach", 1, 1); quest_set(c, "current_marker", 1, 0); }   /* development */
+    uint32_t a[2] = {gpstr(c, "ui:interfaces:backend:world_map"), 1};
+    ext_thiscall(c, FX("?ActivateInterface@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), UISHELL, 2, a);
+    GasBlock *pieces = gas_child(om, "pieces"), *markers = gas_child(om, "markers");
+    for (int i = 0; pieces && i < pieces->nchild; i++) {
+        GasBlock *p = pieces->child[i]; char key[96], nm[96]; snprintf(key, sizeof key, "piece_%s", p->name);
+        if (!quest_get(c, key, 1)) continue;
+        int x = atoi(gas_get(p, "x", "0")), y = atoi(gas_get(p, "y", "0"));
+        snprintf(nm, sizeof nm, "dsx_wmap_piece_%s", p->name);
+        uint32_t w = wmap_window(c, "window", nm, x, y, x + 256, y + 256);
+        if (w) wmap_texture(c, w, gas_get(p, "texture", ""));
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: world map piece %s at %d,%d -> window %08x\n", p->name, x, y, w);
+    }
+    int cur = quest_get(c, "current_marker", 0);
+    if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: world map for '%s': %d pieces, %d markers, current %d\n", omap_for, pieces ? pieces->nchild : -1, markers ? markers->nchild : -1, cur);
+    if (markers && cur > 0 && cur <= markers->nchild) {
+        GasBlock *m = markers->child[cur - 1]; int x = atoi(gas_get(m, "x", "0")), y = atoi(gas_get(m, "y", "0"));
+        uint32_t w = wmap_window(c, "window", "dsx_wmap_marker", x - 16, y - 16, x + 16, y + 16);
+        GasBlock *st = wmap_settings();
+        if (w) wmap_texture(c, w, gas_get(st, "default_marker_texture", "b_gui_ig_mnu_wmap_marker"));
+        uint32_t t = wmap_window(c, "text", "dsx_wmap_marker_name", x - 300, y + 16, x + 300, y + 66);
+        if (t) {
+            uint32_t f = gpstr(c, gas_get(st, "font", "b_gui_fnt_16p_copperplate-light"));
+            uint32_t col = (uint32_t)strtoul(gas_get(st, "default_text_color", "0xFFEDE6C7"), 0, 16), just = 2;   /* justify_center */
+            ext_thiscall(c, FX("?SetFont@UIText@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), t, 1, &f);
+            ext_thiscall(c, FX("?SetColor@UIText@@QAEXI@Z"), t, 1, &col);
+            ext_thiscall(c, FX("?SetJustification@UIText@@QAEXW4JUSTIFICATION@@@Z"), t, 1, &just);
+            uint32_t ta[2] = {gpstr(c, gas_get(m, "screen_name", m->name)), 0};
+            ext_thiscall(c, FX("?SetText@UIText@@AAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@_N@Z"), t, 2, ta);
+        }
+    }
+}
+static void world_map_close(Ctx *c)
+{
+    uint32_t n = gpstr(c, "world_map");
+    /* deferred: this runs while the map's own button is handling the click */
+    ext_thiscall(c, FX("?MarkInterfaceForDeactivation@UIShell@@QAEXABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), UISHELL, 1, &n);
 }
 
 void loa_register(void)
@@ -623,9 +779,9 @@ void loa_register(void)
     ext_add("?SUnTransformMe@TransformationManager@@QAEXPAVGo@@@Z", TransformationManager_SUnTransformMe);
     ext_add("?GetNewTemplateName@TransformationManager@@QAE" GPS_ "PAVGo@@@Z", TransformationManager_GetNewTemplateName);
     ext_add("?FUBI_GetClassSingleton@OverheadMap@@CAPAV1@XZ", OverheadMap_Singleton);
-    ext_add("?RSSetCurrentBackground@OverheadMap@@QAEX" GPS "PBUGoid_@@@Z", OverheadMap_RS2);
-    ext_add("?RSUpdateCurrentAreaMarker@OverheadMap@@QAEX" GPS "PBUGoid_@@@Z", OverheadMap_RS2);
-    ext_add("?RSUpdateMapPieceVisibility@OverheadMap@@QAEX" GPS "_NPBUGoid_@@@Z", OverheadMap_RS3);
+    ext_add("?RSSetCurrentBackground@OverheadMap@@QAEX" GPS "PBUGoid_@@@Z", OverheadMap_RSSetCurrentBackground);
+    ext_add("?RSUpdateCurrentAreaMarker@OverheadMap@@QAEX" GPS "PBUGoid_@@@Z", OverheadMap_RSUpdateCurrentAreaMarker);
+    ext_add("?RSUpdateMapPieceVisibility@OverheadMap@@QAEX" GPS "_NPBUGoid_@@@Z", OverheadMap_RSUpdateMapPieceVisibility);
     ext_add("?GetParty@Player@@QAEPAVGo@@XZ", Player_GetParty);
     ext_add("?SetRealMinutesModifier@TimeOfDay@@QAEXM@Z", TimeOfDay_SetRealMinutesModifier);
     ext_add("?SetGameInputBinderActive@UIGame@@QAEX_N@Z", UIGame_SetGameInputBinderActive);
