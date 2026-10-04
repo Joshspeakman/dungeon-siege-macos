@@ -57,7 +57,11 @@ Not done yet, or simplified:
   the spell ends or with Untransform. A game saved while transformed stores the character in their own form; after
   loading, they stay in their own form until the spell's time runs out.
 - Set items: wearing a full set does not yet give the set bonus.
-- Some interface commands of the expansion: arranging the backpack, auto-sell, a few options-screen entries.
+- Backpacks (an item with its own inventory, opened with a right-click) do not open yet, and the shops' auto-sell
+  is not done.
+- Options: the expansion's extra pages work (Enable Selection Rings, Voice Overs, Voice Over Volume) and are
+  remembered, but Voice Overs and Voice Over Volume do not yet change how dialogue is played (it plays at the
+  Voice Volume).
 - Multiplayer with the expansion has not been tested.
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
