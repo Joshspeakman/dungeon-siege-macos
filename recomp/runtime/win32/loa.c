@@ -59,7 +59,7 @@ static int map_nodes(uint32_t map, uint32_t *node, int max)
 typedef struct { uint32_t key, kind; uint32_t v; } Side;
 static Side side[16384]; static pthread_mutex_t side_lock = PTHREAD_MUTEX_INITIALIZER;
 enum { S_ALLOW_MOVE = 1, S_LODFI, S_PCONTENT_INV, S_DAMAGE_TAKER, S_SPELLBOOK, S_IS_SET_ITEM, S_SET_COUNT, S_REAL_MINUTES, S_COPY_INV,
-       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT };
+       S_TRANSFORM, S_OWN_ASPECT, S_OWN_SCALE, S_CREATURE_ASPECT, S_BLEND_SPEED };
 static uint32_t side_get(uint32_t key, uint32_t kind, uint32_t dflt)
 {
     pthread_mutex_lock(&side_lock); uint32_t h = (key * 2654435761u ^ kind * 40503u) & 16383, r = dflt;
@@ -302,7 +302,10 @@ static void GoAspect_SInitISModifierData(Ctx *c) { RET(0, 0); }
 static void Aspect_InitializeLighting(Ctx *c) { rt_w32(G_MEM, THIS + 0xa8, (ARG(1) << 24) | (ARG(0) & 0xffffff)); RET(0, 2); }
 static void Aspect_GetAmbience(Ctx *c) { RET(rt_r32(G_MEM, THIS + 0xa8) & 0xffffff, 0); }
 static void Aspect_GetAlpha(Ctx *c) { RET(rt_r32(G_MEM, THIS + 0xa8) >> 24, 0); }
-static void Blender_ChangeSpeedModifier(Ctx *c) { RET(0, 1); }
+/* nema::Blender::ChangeSpeedModifier(float): the expansion's haste and slow spells lengthen or shorten a creature's
+ * animations (the value multiplies their duration), and with them its attacks and casting, which happen on animation
+ * events. Applied in Blender::Update (0x69c1be), whose time step is divided by it. */
+static void Blender_ChangeSpeedModifier(Ctx *c) { float m = ARGF(0); if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: blender %08x speed modifier %.2f\n", THIS, m); side_set(THIS, S_BLEND_SPEED, (m > 0.999f && m < 1.001f) || m <= 0 ? 0 : fbits(m)); RET(0, 1); }
 
 /* ---- GoMagic: potions keep their remaining (+0x68) and full (+0x6c) amounts in their potion enchantment ---- */
 static uint32_t potion_enchantment(uint32_t magic)
@@ -937,6 +940,12 @@ static int override_impl(Ctx *c, uint32_t addr)
         else if (!strcasestr(m, "import")) w32_import_from_ds1 = 0;   /* any other command: the import screen is gone */
         return 0;
     }
+    case 0x69c1be: {                                  /* nema::Blender::Update(float dt): a speed modifier scales the step */
+        uint32_t m = side_get(c->ecx, S_BLEND_SPEED, 0);
+        if (m) rt_wf32(G_MEM, c->esp + 4, ARGF(0) / bitsf(m));   /* a duration factor: slow 2.0, haste 0.8 ("1 / 0.8 = 1.25") */
+        if (m && getenv("DS_LOA_SPEEDTEST")) { static int n; if (!(n++ % 120)) fprintf(stderr, "loa: blender %08x step scaled by 1/%.2f\n", c->ecx, bitsf(m)); }
+        return 0;
+    }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */
@@ -1207,8 +1216,13 @@ static void key_untransform(Ctx *c)
 {
     const char *test = getenv("DS_LOA_TRANSFORMTEST");      /* development: Y turns the first party member into <template> and back */
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
-    if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
     uint32_t m[16];
+    if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
+    if (getenv("DS_LOA_SPEEDTEST") && party_members(c, m, 16)) {   /* development: Y gives the first member's animations a speed modifier */
+        uint32_t as = GO_ASPECT(m[0]), np = as ? rt_r32(G_MEM, as + 0x38) : 0, bl = np ? rt_r32(G_MEM, np + 0xe8) : 0;
+        float f = (float)atof(getenv("DS_LOA_SPEEDTEST")); side_set(bl, S_BLEND_SPEED, fbits(f));
+        fprintf(stderr, "loa: test speed modifier %.2f on blender %08x\n", f, bl); RET(1, 0);
+    }
     if (test && party_members(c, m, 16)) { if (!untransform_go(c, m[0])) transform_go(c, m[0], test); }
     else if (spell && party_members(c, m, 16) && is_transformed(c, m[0])) { if (!end_party_spells(c, 1)) fprintf(stderr, "loa: no transformation to end\n"); }
     else if (spell && party_members(c, m, 16)) {
