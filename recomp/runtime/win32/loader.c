@@ -76,7 +76,7 @@ void rt_import(Ctx *c, uint32_t index)
     w32_crash_record_call(index);
     if (index < MAX_THUNKS && thunk_target[index]) { rt_call(c, thunk_target[index]); return; }
     w32_trace_import(c, index);
-    if (!text_trace_init) { text_trace_init = 1; const char *p = getenv("W32_TRACE"); if (p) text_trace = fopen(p, "w"); }
+    if (!text_trace_init) { text_trace_init = 1; const char *p = getenv("W32_TRACE"); if (p && (text_trace = fopen(p, "w"))) setvbuf(text_trace, 0, _IOLBF, 0); }   /* lines survive an abrupt exit */
     if (text_trace && index < nthunks && thunk_fn[index]) {
         uint32_t a[5]; for (int k = 0; k < 5; k++) a[k] = rt_r32(G_MEM, c->esp + 4 + 4 * k);
         uint32_t ret = rt_r32(G_MEM, c->esp), tid = rt_r32(G_MEM, c->fs_base + 0x24);

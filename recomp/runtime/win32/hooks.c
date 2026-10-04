@@ -90,5 +90,17 @@ void rt_hook(Ctx *c, uint32_t addr)
 int rt_override(Ctx *c, uint32_t addr)
 {
     extern int loa_active; int loa_override(Ctx *, uint32_t);
+    if (addr == 0x41aea9u) {                      /* W32_CRCLOG=<path>: the checksums FuBi's sync digest is built from */
+        static FILE *f; static int init; if (!init) { init = 1; const char *p = getenv("W32_CRCLOG"); if (p) f = fopen(p, "w"); }
+        if (!f) return 0;
+        uint32_t ret = rt_r32(G_MEM, c->esp), seed = rt_r32(G_MEM, c->esp + 4), ptr = rt_r32(G_MEM, c->esp + 8), len = rt_r32(G_MEM, c->esp + 12);
+        if ((ret >= 0x452000u && ret < 0x45c000u) || ret == 0x46f7a7u) {   /* FuBi digest; content schemas */
+            fprintf(f, "%06x %08x %u ", ret, seed, len);
+            for (uint32_t i = 0; i < len && i < (ret == 0x46f7a7u ? 4096u : 300u); i++) { uint8_t b = rt_r8(G_MEM, ptr + i); if (len == 8 || len == 4 || ret == 0x46f7a7u) fprintf(f, "%02x", b); else fputc(b >= 32 && b < 127 ? b : '.', f); }
+            fputc('\n', f); fflush(f);
+        }
+        return 0;
+    }
+    if (addr == 0x412d12u) return loa_override(c, addr);       /* DS_REPORTLOG: the engine's reports, in any game */
     return loa_active ? loa_override(c, addr) : 0;
 }

@@ -180,13 +180,13 @@ static void a_BuildFromDirectPlay4Address(Ctx *c) { RET(DPNERR_UNSUPPORTED, 3); 
 /* ================================================================ sessions ([MC-DPL8CS], client/server mode) */
 enum {
     MSG_CONNECT_INFO = 0xC1, MSG_SEND_CONNECT_INFO = 0xC2, MSG_ACK_CONNECT_INFO = 0xC3, MSG_CONNECT_FAILED = 0xC5,
-    MSG_DESTROY_PLAYER = 0xD1, MSG_REQ_UPDATE_INFO = 0xD6, MSG_UPDATE_INFO = 0xDB, MSG_TERMINATE_SESSION = 0xDF, MSG_REQ_PROCESS_COMPLETION = 0xE0, MSG_PROCESS_COMPLETION = 0xE1,
+    MSG_DESTROY_PLAYER = 0xD1, MSG_REQ_UPDATE_INFO = 0xD6, MSG_UPDATE_INFO = 0xDB, MSG_TERMINATE_SESSION = 0xDF, MSG_REQ_PROCESS_COMPLETION = 0xE0, MSG_PROCESS_COMPLETION = 0xE1, MSG_UPDATE_APPLICATION_DESC = 0xCF,
     NT_LOCAL = 0x1, NT_HOST = 0x2, NT_CLIENT = 0x200, NT_SERVER = 0x400,
     SESS_CLIENT_SERVER = 0x1, SESS_REQUIREPASSWORD = 0x80,
     DNET_VERSION = 2,                                   /* DirectX 8.1, like the game's own SDK */
 };
 /* DirectPlay messages to the game (DPN_MSGID_*) */
-enum { M_ASYNC_OP_COMPLETE = 0xFFFF0003u, M_CLIENT_INFO = 0xFFFF0004u, M_CONNECT_COMPLETE = 0xFFFF0005u, M_CREATE_PLAYER = 0xFFFF0007u,
+enum { M_APPLICATION_DESC = 0xFFFF0001u, M_ASYNC_OP_COMPLETE = 0xFFFF0003u, M_CLIENT_INFO = 0xFFFF0004u, M_CONNECT_COMPLETE = 0xFFFF0005u, M_CREATE_PLAYER = 0xFFFF0007u,
        M_DESTROY_PLAYER = 0xFFFF0009u, M_ENUM_HOSTS_QUERY = 0xFFFF000Au, M_ENUM_HOSTS_RESPONSE = 0xFFFF000Bu,
        M_INDICATE_CONNECT = 0xFFFF000Eu, M_INDICATED_CONNECT_ABORTED = 0xFFFF000Fu, M_RECEIVE = 0xFFFF0011u,
        M_RETURN_BUFFER = 0xFFFF0013u, M_SEND_COMPLETE = 0xFFFF0014u, M_SERVER_INFO = 0xFFFF0015u, M_TERMINATE_SESSION = 0xFFFF0016u };
@@ -365,7 +365,7 @@ static void send_connect_info(Sess *s, dp8_conn *c, const struct sockaddr_in *lo
 static void send_connect_reply(Sess *s, Player *p, const Blob *reply)
 {
     Buf b = {0}; bput32(&b, MSG_SEND_CONNECT_INFO); bput32(&b, 0); bput32(&b, 0);
-    bput32(&b, 0x50); bput32(&b, s->flags); bput32(&b, s->maxplayers);
+    bput32(&b, 0x50); bput32(&b, s->flags & ~(uint32_t)SESS_CLIENT_SERVER); bput32(&b, s->maxplayers);
     uint32_t cur = 1; for (int i = 0; i < 256; i++) if (s->pl[i].used && s->pl[i].created) cur++;
     bput32(&b, cur);
     for (int i = 0; i < 8; i++) bput32(&b, 0);                     /* session name, password, reserved, app reserved */
@@ -390,6 +390,24 @@ static void send_connect_failed(dp8_conn *c, uint32_t hr, const Blob *reply)
     Buf b = {0}; bput32(&b, MSG_CONNECT_FAILED); bput32(&b, hr); bput32(&b, 0); bput32(&b, 0);
     if (reply) put_blob_field(&b, 8, 12, reply);
     send_core(c, &b);
+}
+/* server -> every client: the session's new application description after SetApplicationDesc (the game keeps its state
+ * in the description's reserved data, and Windows clients wait for it when a game starts); offsets count from after
+ * the message type, the strings follow the 0x50-byte description as in Microsoft's own messages */
+static void send_app_desc_update(Sess *s)
+{
+    for (int i = 0; i < 256; i++) {
+        Player *p = &s->pl[i]; if (!p->used || !p->created || !p->conn) continue;
+        Buf b = {0}; bput32(&b, MSG_UPDATE_APPLICATION_DESC);
+        size_t a = b.n; bput32(&b, 0x50); bput32(&b, s->flags & ~(uint32_t)SESS_CLIENT_SERVER); bput32(&b, s->maxplayers);
+        uint32_t cur = 1; for (int k = 0; k < 256; k++) if (s->pl[k].used && s->pl[k].created) cur++;
+        bput32(&b, cur); for (int k = 0; k < 8; k++) bput32(&b, 0);
+        bput(&b, s->instance, 16); bput(&b, s->app, 16);
+        put_blob_field(&b, a + 40, a + 44, &s->app_reserved);
+        if (s->flags & SESS_REQUIREPASSWORD) put_blob_field(&b, a + 24, a + 28, &s->password);
+        put_blob_field(&b, a + 16, a + 20, &s->sess_name);
+        send_core(p->conn, &b);
+    }
 }
 /* DN_UPDATE_INFO ([MC-DPL8CS] 2.2.5.2): a player's new name/data, server -> client */
 static void send_update_info(Sess *s, dp8_conn *c, uint32_t context, uint32_t dpnid, uint32_t requesting, const Blob *name, const Blob *data)
@@ -531,7 +549,7 @@ static int post_enum_query(Ctx *c, Ev *e, uint32_t pm, uint32_t hr)
         Buf b = {0}; uint8_t h[4] = {0, 3, (uint8_t)e->a[8], (uint8_t)(e->a[8] >> 8)}; bput(&b, h, 4);
         size_t base = b.n;                                        /* offsets count from here (ReplyOffset) */
         for (int i = 0; i < 2; i++) bput32(&b, 0);
-        bput32(&b, 0x50); bput32(&b, s->flags); bput32(&b, s->maxplayers);
+        bput32(&b, 0x50); bput32(&b, s->flags & ~(uint32_t)SESS_CLIENT_SERVER); bput32(&b, s->maxplayers);
         uint32_t cur = 1; for (int i = 0; i < 256; i++) if (s->pl[i].used && s->pl[i].created) cur++;
         bput32(&b, cur); for (int i = 0; i < 8; i++) bput32(&b, 0);
         bput(&b, s->instance, 16); bput(&b, s->app, 16);
@@ -580,7 +598,7 @@ static void client_receive(Sess *s, dp8_conn *conn, uint8_t user, const uint8_t 
         if (type == MSG_SEND_CONNECT_INFO && n >= 4 + 8 + 0x50 + 20) {
             pthread_mutex_lock(&s->m);
             const uint8_t *ad = d + 12;                            /* application description */
-            s->flags = rd32(ad + 4); s->maxplayers = rd32(ad + 8); memcpy(s->instance, ad + 48, 16); memcpy(s->app, ad + 64, 16);
+            s->flags = rd32(ad + 4) | SESS_CLIENT_SERVER; s->maxplayers = rd32(ad + 8); memcpy(s->instance, ad + 48, 16); memcpy(s->app, ad + 64, 16);
             Blob sn; if (!field(d, n, rd32(ad + 16), rd32(ad + 20), &sn)) blob_set(&s->sess_name, sn.p, sn.n);
             Blob ar; if (!field(d, n, rd32(ad + 40), rd32(ad + 44), &ar)) blob_set(&s->app_reserved, ar.p, ar.n);
             const uint8_t *nt = ad + 0x50; s->local_dpnid = rd32(nt); uint32_t entries = rd32(nt + 12);
@@ -612,6 +630,14 @@ static void client_receive(Sess *s, dp8_conn *conn, uint8_t user, const uint8_t 
             if (server && (fl & 2)) blob_set(&s->server_pl.data, dt.p, dt.n);
             pthread_mutex_unlock(&s->m);
             if (server) ev_simple(s, M_SERVER_INFO, 12, who, 0, 0, 0, 0);   /* {dwSize, dpnidServer, pvPlayerContext} */
+        } else if (type == MSG_UPDATE_APPLICATION_DESC && n >= 4 + 0x50) {
+            const uint8_t *ad = d + 4; Blob sn, ar;
+            pthread_mutex_lock(&s->m);
+            s->flags = rd32(ad + 4) | SESS_CLIENT_SERVER; s->maxplayers = rd32(ad + 8);
+            if (!field(d, n, rd32(ad + 16), rd32(ad + 20), &sn) && sn.n) blob_set(&s->sess_name, sn.p, sn.n);
+            if (!field(d, n, rd32(ad + 40), rd32(ad + 44), &ar)) blob_set(&s->app_reserved, ar.p, ar.n);
+            pthread_mutex_unlock(&s->m);
+            ev_simple(s, M_APPLICATION_DESC, 4, 0, 0, 0, 0, 0);       /* DPNMSG_APPLICATION_DESC {dwSize} */
         } else if (type == MSG_REQ_PROCESS_COMPLETION && n >= 8) {
             ev_receive(s, s->server_pl.dpnid, 0, d + 8, n - 8);
             Buf b = {0}; bput32(&b, MSG_PROCESS_COMPLETION); bput32(&b, rd32(d + 4)); send_core(conn, &b);
@@ -1015,7 +1041,8 @@ static void cs_GetApplicationDesc(Ctx *c)
 static void sv_SetApplicationDesc(Ctx *c)
 {
     dump_args("SetApplicationDesc", c, 3); Obj *o = O(ARG(0)); Sess *s = o ? sess_of(o) : 0; if (!s) RET(DPNERR_INVALIDPARAM, 3);
-    pthread_mutex_lock(&s->m); uint8_t inst[16]; memcpy(inst, s->instance, 16); read_app_desc(s, ARG(1)); memcpy(s->instance, inst, 16); pthread_mutex_unlock(&s->m);
+    pthread_mutex_lock(&s->m); uint8_t inst[16]; memcpy(inst, s->instance, 16); read_app_desc(s, ARG(1)); memcpy(s->instance, inst, 16);
+    send_app_desc_update(s); pthread_mutex_unlock(&s->m);
     RET(S_OK_, 3);
 }
 static void sv_Host(Ctx *c)
