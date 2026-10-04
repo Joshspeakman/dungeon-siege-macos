@@ -66,6 +66,7 @@ OVERRIDES = {
     0x0062ee57: 'sound: play a stream',
     0x005a4d17: 'Enchantment: apply its alteration',
     0x005a6417: 'Enchantment: move skill points (from, to, amount)',
+    0x004e271b: 'UIIntro: start the intro (bool: with the logos)',
 }
 
 class Unsupported(Exception): pass
