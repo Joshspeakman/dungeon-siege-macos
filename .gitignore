@@ -1,0 +1,12 @@
+build/
+*.o
+.DS_Store
+# never commit game files
+*.exe
+*.dsres
+*.dssave
+*.dsasave
+# recompiler: environment and everything generated from the user's executable (never commit)
+recomp/.venv/
+recomp/work/
+recomp/out/

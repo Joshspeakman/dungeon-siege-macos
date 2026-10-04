@@ -1,0 +1,397 @@
+/* Files: Windows paths -> host paths (case-insensitive), file handles. */
+#include "w32.h"
+#include <dirent.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+char w32_drive_c[1024];                /* host directory for C:\ (other than the game folder) */
+char w32_cwd[1024] = "C:\\GOG Games\\Dungeon Siege";
+static const char GAME_PREFIX[] = "c:\\gog games\\dungeon siege";
+
+/* find `name` in host directory `dir` ignoring case; writes the real name */
+static int ci_lookup(const char *dir, const char *name, char *out, size_t cap)
+{
+    char p[2048]; struct stat st;
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    if (!lstat(p, &st)) { snprintf(out, cap, "%s", name); return 1; }
+    DIR *d = opendir(dir); if (!d) return 0;
+    struct dirent *e; int ok = 0;
+    while ((e = readdir(d))) if (!strcasecmp(e->d_name, name)) { snprintf(out, cap, "%s", e->d_name); ok = 1; break; }
+    closedir(d); return ok;
+}
+char w32_game_overlay[1024];          /* writes to the game folder land here ("" = write in place) */
+static int exists(const char *p) { struct stat st; return !stat(p, &st); }
+static void mkdirs(const char *p)          /* create every missing parent of p */
+{
+    char t[2048]; snprintf(t, sizeof t, "%s", p);
+    for (char *s = t + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(t, 0755); *s = '/'; }
+}
+static int copy_file(const char *from, const char *to)
+{
+    FILE *a = fopen(from, "rb"); if (!a) return -1;
+    mkdirs(to); FILE *b = fopen(to, "wb"); if (!b) { fclose(a); return -1; }
+    char buf[65536]; size_t n; while ((n = fread(buf, 1, sizeof buf, a))) fwrite(buf, 1, n, b);
+    fclose(a); fclose(b); return 0;
+}
+/* resolve path components below `root` case-insensitively; missing components are kept as given */
+static void resolve(const char *root, char **parts, int from, int np, char *out, size_t cap)
+{
+    char cur[2048]; snprintf(cur, sizeof cur, "%s", root);
+    for (int j = from; j < np; j++) {
+        char real[512]; size_t l = strlen(cur);
+        if (ci_lookup(cur, parts[j], real, sizeof real)) snprintf(cur + l, sizeof cur - l, "/%s", real);
+        else snprintf(cur + l, sizeof cur - l, "/%s", parts[j]);
+    }
+    snprintf(out, cap, "%s", cur);
+}
+/* Windows path -> host path. mode 0: read (overlay if present, else base); 1: create/write (overlay, copied up). */
+int w32_host_path(const char *win, char *out, size_t cap, int mode)
+{
+    char full[2048], norm[2048];
+    if (((win[0] | 32) >= 'a' && (win[0] | 32) <= 'z') && win[1] == ':') snprintf(full, sizeof full, "%s", win);
+    else if (win[0] == '\\' || win[0] == '/') snprintf(full, sizeof full, "C:%s", win);
+    else snprintf(full, sizeof full, "%s\\%s", w32_cwd, win);
+    if ((full[0] | 32) != 'c') return -1;
+    char *parts[256]; int np = 0; size_t k;
+    for (char *s = full; *s; s++) if (*s == '/') *s = '\\';
+    char *save, *tok = strtok_r(full + 2, "\\", &save);
+    while (tok) {
+        if (!strcmp(tok, "..")) { if (np) np--; }
+        else if (strcmp(tok, ".") && *tok) parts[np++] = tok;
+        tok = strtok_r(0, "\\", &save);
+    }
+    norm[0] = 'c'; norm[1] = ':'; norm[2] = 0; k = 2;
+    for (int j = 0; j < np; j++) k += (size_t)snprintf(norm + k, sizeof norm - k, "\\%s", parts[j]);
+    size_t gl = strlen(GAME_PREFIX);
+    if (!(np >= 2 && !strncasecmp(norm, GAME_PREFIX, gl) && (norm[gl] == 0 || norm[gl] == '\\'))) {
+        resolve(w32_drive_c, parts, 0, np, out, cap);
+        if (mode) mkdirs(out);
+        return 0;
+    }
+    char base[2048]; resolve(w32_game_dir, parts, 2, np, base, sizeof base);
+    if (!*w32_game_overlay) { snprintf(out, cap, "%s", base); return 0; }
+    char ov[2048]; resolve(w32_game_overlay, parts, 2, np, ov, sizeof ov);
+    if (exists(ov)) { snprintf(out, cap, "%s", ov); return 0; }
+    if (!mode) { snprintf(out, cap, "%s", base); return 0; }
+    struct stat st;
+    if (!stat(base, &st) && S_ISREG(st.st_mode)) copy_file(base, ov); else mkdirs(ov);
+    snprintf(out, cap, "%s", ov);
+    return 0;
+}
+/* both host directories behind a game-folder directory (overlay first); returns how many exist */
+int w32_host_dirs(const char *win, char dirs[2][2048])
+{
+    char save_ov[1024]; int n = 0;
+    snprintf(save_ov, sizeof save_ov, "%s", w32_game_overlay);
+    if (!w32_host_path(win, dirs[n], 2048, 0) && exists(dirs[n])) n++;
+    if (*save_ov) {
+        w32_game_overlay[0] = 0;
+        if (!w32_host_path(win, dirs[n], 2048, 0) && exists(dirs[n]) && (n == 0 || strcmp(dirs[0], dirs[n]))) n++;
+        snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s", save_ov);
+    }
+    return n;
+}
+
+IMPL(kernel32, GetFileType)
+{
+    HObj *o = h_get(ARG(0), H_FILE);
+    if (!o) { w32_set_last_error(c, 6); RET(0, 1); }
+    RET(1, 1);                                              /* FILE_TYPE_DISK */
+}
+
+/* ---- path queries ---- */
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <fnmatch.h>
+extern char w32_cwd[1024];
+static uint32_t copy_out(Ctx *c, const char *s, uint32_t buf, uint32_t cap)   /* returns length, or needed size */
+{
+    uint32_t n = (uint32_t)strlen(s);
+    if (n + 1 > cap) return n + 1;
+    memcpy(GP(buf), s, n + 1); (void)c; return n;
+}
+static void full_win_path(const char *in, char *out, size_t cap)
+{
+    char tmp[2048];
+    if (((in[0] | 32) >= 'a' && (in[0] | 32) <= 'z') && in[1] == ':') snprintf(tmp, sizeof tmp, "%s", in);
+    else if (in[0] == '\\' || in[0] == '/') snprintf(tmp, sizeof tmp, "C:%s", in);
+    else snprintf(tmp, sizeof tmp, "%s\\%s", w32_cwd, in);
+    char *parts[256]; int np = 0;
+    for (char *s = tmp; *s; s++) if (*s == '/') *s = '\\';
+    char drive = (char)(tmp[0] & ~32), *save, *tok = strtok_r(tmp + 2, "\\", &save);
+    while (tok) { if (!strcmp(tok, "..")) { if (np) np--; } else if (strcmp(tok, ".") && *tok) parts[np++] = tok; tok = strtok_r(0, "\\", &save); }
+    size_t k = (size_t)snprintf(out, cap, "%c:", drive);
+    for (int j = 0; j < np; j++) k += (size_t)snprintf(out + k, cap - k, "\\%s", parts[j]);
+    if (!np) snprintf(out + k, cap - k, "\\");
+    size_t l = strlen(in);
+    if (l && (in[l - 1] == '\\' || in[l - 1] == '/') && np) snprintf(out + strlen(out), cap - strlen(out), "\\");
+}
+IMPL(kernel32, GetLongPathNameA) { RET(copy_out(c, GS(ARG(0)), ARG(1), ARG(2)), 3); }
+IMPL(kernel32, GetFullPathNameA)
+{
+    char full[2048]; full_win_path(GS(ARG(0)), full, sizeof full);
+    uint32_t buf = ARG(2), fp = ARG(3), r = copy_out(c, full, buf, ARG(1));
+    if (fp && r < ARG(1)) { const char *s = strrchr(full, '\\'); rt_w32(G_MEM, fp, s && s[1] ? buf + (uint32_t)(s + 1 - full) : 0); }
+    RET(r, 4);
+}
+IMPL(kernel32, GetCurrentDirectoryA) { RET(copy_out(c, w32_cwd, ARG(1), ARG(0)), 2); }
+IMPL(kernel32, GetTempPathA) { RET(copy_out(c, "C:\\Temp\\", ARG(1), ARG(0)), 2); }
+static int host(Ctx *c, uint32_t win, char *out, int create)
+{
+    if (w32_host_path(GS(win), out, 2048, create)) { w32_set_last_error(c, 3); return -1; }
+    return 0;
+}
+IMPL(kernel32, GetFileAttributesA)
+{
+    char p[2048]; struct stat st;
+    if (host(c, ARG(0), p, 0) || stat(p, &st)) { w32_set_last_error(c, 2); RET(0xffffffffu, 1); }
+    RET(S_ISDIR(st.st_mode) ? 0x10 : (st.st_mode & S_IWUSR) ? 0x20 : 0x21, 1);
+}
+IMPL(kernel32, SetFileAttributesA) { char p[2048]; struct stat st; RET(!host(c, ARG(0), p, 0) && !stat(p, &st), 2); }
+IMPL(kernel32, CreateDirectoryA)
+{
+    char p[2048]; if (host(c, ARG(0), p, 1)) RET(0, 2);
+    if (mkdir(p, 0755)) { w32_set_last_error(c, errno == EEXIST ? 183 : 3); RET(0, 2); }
+    RET(1, 2);
+}
+IMPL(kernel32, RemoveDirectoryA) { char p[2048]; if (host(c, ARG(0), p, 0) || rmdir(p)) { w32_set_last_error(c, 2); RET(0, 1); } RET(1, 1); }
+IMPL(kernel32, DeleteFileA) { char p[2048]; if (host(c, ARG(0), p, 0) || unlink(p)) { w32_set_last_error(c, 2); RET(0, 1); } RET(1, 1); }
+IMPL(kernel32, MoveFileA)
+{
+    char a[2048], b[2048]; struct stat st;
+    if (host(c, ARG(0), a, 0) || host(c, ARG(1), b, 1)) RET(0, 2);
+    if (!stat(b, &st)) { w32_set_last_error(c, 183); RET(0, 2); }
+    if (rename(a, b)) { w32_set_last_error(c, 2); RET(0, 2); }
+    RET(1, 2);
+}
+IMPL(kernel32, GetDriveTypeA) { RET(3, 1); }                              /* DRIVE_FIXED */
+IMPL(kernel32, GetLogicalDriveStringsA)
+{
+    if (ARG(0) < 5) RET(5, 2);
+    memcpy(GP(ARG(1)), "C:\\\0\0", 5); RET(4, 2);
+}
+IMPL(kernel32, GetVolumeInformationA)
+{
+    uint32_t name = ARG(1), nsz = ARG(2), serial = ARG(3), maxlen = ARG(4), flags = ARG(5), fs = ARG(6), fsz = ARG(7);
+    if (name && nsz) copy_out(c, "MAC", name, nsz);
+    if (serial) rt_w32(G_MEM, serial, 0x1234abcd);
+    if (maxlen) rt_w32(G_MEM, maxlen, 255);
+    if (flags) rt_w32(G_MEM, flags, 0x3);
+    if (fs && fsz) copy_out(c, "NTFS", fs, fsz);
+    RET(1, 8);
+}
+IMPL(kernel32, GetDiskFreeSpaceExA)
+{
+    for (int k = 1; k <= 3; k++) if (ARG(k)) rt_w64(G_MEM, ARG(k), 64ull << 30);
+    RET(1, 4);
+}
+IMPL(kernel32, GetTempFileNameA)
+{
+    static uint32_t n = 1; uint32_t u = ARG(2) ? ARG(2) : n++;
+    char s[2048]; snprintf(s, sizeof s, "%s\\%.3s%X.tmp", GS(ARG(0)), GS(ARG(1)), u & 0xffff);
+    copy_out(c, s, ARG(3), 260);
+    if (!ARG(2)) { char p[2048]; if (!w32_host_path(s, p, sizeof p, 1)) { int fd = open(p, O_CREAT | O_WRONLY, 0644); if (fd >= 0) close(fd); } }
+    RET(u, 4);
+}
+
+/* ---- file handles ---- */
+typedef struct File { int fd; char path[1024]; int is_dir; } File;
+static uint64_t ft_from_ts(struct timespec t)
+{
+    if (w32_deterministic) return 132000000000000000ull;          /* harness: file times must not differ between runs */
+    return ((uint64_t)t.tv_sec + 11644473600ull) * 10000000ull + (uint64_t)t.tv_nsec / 100;
+}
+IMPL(kernel32, CreateFileA)
+{
+    uint32_t access = ARG(1), disp = ARG(4), flags = ARG(5); char p[2048]; struct stat st;
+    if (host(c, ARG(0), p, 1)) RET(0xffffffffu, 7);
+    int exists = !stat(p, &st), isdir = exists && S_ISDIR(st.st_mode);
+    if (isdir && !(flags & 0x02000000)) { w32_set_last_error(c, 5); RET(0xffffffffu, 7); }
+    int of = (access & 0x40000000) ? ((access & 0x80000000) ? O_RDWR : O_WRONLY) : O_RDONLY;
+    if (isdir) of = O_RDONLY;
+    switch (disp) {
+    case 1: if (exists) { w32_set_last_error(c, 80); RET(0xffffffffu, 7); } of |= O_CREAT | O_EXCL; break;
+    case 2: of |= O_CREAT | O_TRUNC; break;
+    case 3: if (!exists) { w32_set_last_error(c, 2); RET(0xffffffffu, 7); } break;
+    case 4: of |= O_CREAT; break;
+    case 5: if (!exists) { w32_set_last_error(c, 2); RET(0xffffffffu, 7); } of |= O_TRUNC; break;
+    }
+    if ((of & O_CREAT) && !(access & 0x40000000)) of = (of & ~O_ACCMODE) | O_RDWR;
+    int fd = open(p, of, 0644);
+    if (fd < 0) { w32_set_last_error(c, errno == ENOENT ? 3 : 5); RET(0xffffffffu, 7); }
+    File *f = calloc(1, sizeof *f); f->fd = fd; f->is_dir = isdir; snprintf(f->path, sizeof f->path, "%s", p);
+    w32_set_last_error(c, (exists && (disp == 2 || disp == 4)) ? 183 : 0);
+    uint32_t h = h_new(H_FILE, f);
+    if (getenv("W32_FILELOG")) fprintf(stderr, "w32: CreateFileA(%s) -> %x fd %d (%s)\n", GS(ARG(0)), h, fd, p);
+    RET(h, 7);
+}
+void w32_file_closed(HObj *o)
+{
+    if (o->type == H_FILE) { File *f = o->p; close(f->fd); free(f); }
+}
+IMPL(kernel32, ReadFile)
+{
+    HObj *o = h_get(ARG(0), H_FILE); uint32_t buf = ARG(1), n = ARG(2), rd = ARG(3);
+    if (!o) { w32_set_last_error(c, 6); RET(0, 5); }
+    ssize_t r = read(((File *)o->p)->fd, GP(buf), n);
+    if (rd) rt_w32(G_MEM, rd, r > 0 ? (uint32_t)r : 0);
+    RET(r >= 0, 5);
+}
+IMPL(kernel32, WriteFile)
+{
+    HObj *o = h_get(ARG(0), H_FILE); uint32_t buf = ARG(1), n = ARG(2), wr = ARG(3);
+    if (!o) { w32_set_last_error(c, 6); RET(0, 5); }
+    ssize_t r = write(((File *)o->p)->fd, GP(buf), n);
+    if (wr) rt_w32(G_MEM, wr, r > 0 ? (uint32_t)r : 0);
+    RET(r >= 0, 5);
+}
+IMPL(kernel32, SetFilePointer)
+{
+    HObj *o = h_get(ARG(0), H_FILE); uint32_t hi = ARG(2), method = ARG(3);
+    if (!o) { w32_set_last_error(c, 6); RET(0xffffffffu, 4); }
+    int64_t off = hi ? (int64_t)(((uint64_t)rt_r32(G_MEM, hi) << 32) | ARG(1)) : (int64_t)(int32_t)ARG(1);
+    off_t r = lseek(((File *)o->p)->fd, off, method == 0 ? SEEK_SET : method == 1 ? SEEK_CUR : SEEK_END);
+    if (r < 0) { w32_set_last_error(c, 131); RET(0xffffffffu, 4); }
+    if (hi) rt_w32(G_MEM, hi, (uint32_t)((uint64_t)r >> 32));
+    w32_set_last_error(c, 0); RET((uint32_t)r, 4);
+}
+IMPL(kernel32, GetFileSize)
+{
+    HObj *o = h_get(ARG(0), H_FILE); struct stat st;
+    if (!o || fstat(((File *)o->p)->fd, &st)) { w32_set_last_error(c, 6); RET(0xffffffffu, 2); }
+    if (getenv("W32_FILELOG")) fprintf(stderr, "w32: GetFileSize(%x) fd %d %s -> %lld\n", ARG(0), ((File *)o->p)->fd, ((File *)o->p)->path, (long long)st.st_size);
+    if (ARG(1)) rt_w32(G_MEM, ARG(1), (uint32_t)((uint64_t)st.st_size >> 32));
+    RET((uint32_t)st.st_size, 2);
+}
+IMPL(kernel32, GetFileTime)
+{
+    HObj *o = h_get(ARG(0), H_FILE); struct stat st;
+    if (!o || fstat(((File *)o->p)->fd, &st)) { w32_set_last_error(c, 6); RET(0, 4); }
+    if (ARG(1)) rt_w64(G_MEM, ARG(1), ft_from_ts(st.st_birthtimespec));
+    if (ARG(2)) rt_w64(G_MEM, ARG(2), ft_from_ts(st.st_atimespec));
+    if (ARG(3)) rt_w64(G_MEM, ARG(3), ft_from_ts(st.st_mtimespec));
+    RET(1, 4);
+}
+IMPL(kernel32, FlushFileBuffers) { RET(h_get(ARG(0), H_FILE) != 0, 1); }
+
+/* ---- directory enumeration (case-insensitive name order, "." and ".." first, like NTFS) ---- */
+typedef struct Find { char dir[1024], dir2[1024]; char **names; int n, pos; } Find;
+static int ci_cmp(const void *a, const void *b) { return strcasecmp(*(char *const *)a, *(char *const *)b); }
+static void fill_find(Find *fd, const char *name, uint32_t out)
+{
+    char p[2048]; struct stat st; memset(GP(out), 0, 320);
+    snprintf(p, sizeof p, "%s/%s", fd->dir, name);
+    if (stat(p, &st) && fd->dir2[0]) snprintf(p, sizeof p, "%s/%s", fd->dir2, name);
+    if (!stat(p, &st)) {
+        rt_w32(G_MEM, out, S_ISDIR(st.st_mode) ? 0x10 : 0x20);
+        rt_w64(G_MEM, out + 4, ft_from_ts(st.st_birthtimespec)); rt_w64(G_MEM, out + 12, ft_from_ts(st.st_atimespec));
+        rt_w64(G_MEM, out + 20, ft_from_ts(st.st_mtimespec));
+        rt_w32(G_MEM, out + 28, (uint32_t)((uint64_t)st.st_size >> 32)); rt_w32(G_MEM, out + 32, S_ISDIR(st.st_mode) ? 0 : (uint32_t)st.st_size);
+    }
+    snprintf((char *)GP(out + 44), 260, "%s", name);
+}
+int w32_hide_seefar;    /* set by the host when its draw distance setting is on */
+IMPL(kernel32, FindFirstFileA)
+{
+    char win[2048], p[2048]; snprintf(win, sizeof win, "%s", GS(ARG(0)));
+    for (char *s = win; *s; s++) if (*s == '/') *s = '\\';
+    char *sl = strrchr(win, '\\'); const char *pat = sl ? sl + 1 : win;
+    char dirwin[2048]; if (sl) snprintf(dirwin, sizeof dirwin, "%.*s", (int)(sl - win), win); else snprintf(dirwin, sizeof dirwin, ".");
+    if (!*dirwin) snprintf(dirwin, sizeof dirwin, "\\");
+    char dirs[2][2048]; int nd = w32_host_dirs(dirwin, dirs);
+    if (!nd) { w32_set_last_error(c, 3); RET(0xffffffffu, 2); }
+    (void)p;
+    Find *fd = calloc(1, sizeof *fd); snprintf(fd->dir, sizeof fd->dir, "%s", dirs[0]); snprintf(fd->dir2, sizeof fd->dir2, "%s", nd > 1 ? dirs[1] : "");
+    int cap = 64; fd->names = malloc(cap * sizeof *fd->names);
+    const char *pt = !strcmp(pat, "*.*") ? "*" : pat;
+    int is_root = strlen(dirwin) <= 3;
+    for (int di = 0; di < nd; di++) {
+        DIR *d = opendir(dirs[di]); if (!d) continue;
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (is_root && (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))) continue;
+            if (e->d_name[0] == '.' && strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) continue;    /* host dotfiles */
+            if (fnmatch(pt, e->d_name, FNM_CASEFOLD)) continue;
+            if (w32_hide_seefar && !fnmatch("sf_seefar*.dsres", e->d_name, FNM_CASEFOLD)) continue;   /* built-in draw distance replaces it */
+            int dup = 0; for (int j = 0; j < fd->n; j++) if (!strcasecmp(fd->names[j], e->d_name)) { dup = 1; break; }
+            if (dup) continue;
+            if (fd->n == cap) { cap *= 2; fd->names = realloc(fd->names, cap * sizeof *fd->names); }
+            fd->names[fd->n++] = strdup(e->d_name);
+        }
+        closedir(d);
+    }
+    qsort(fd->names, (size_t)fd->n, sizeof *fd->names, ci_cmp);       /* "." and ".." sort first */
+    if (!fd->n) { free(fd->names); free(fd); w32_set_last_error(c, 2); RET(0xffffffffu, 2); }
+    fill_find(fd, fd->names[0], ARG(1)); fd->pos = 1;
+    RET(h_new(H_FIND, fd), 2);
+}
+IMPL(kernel32, FindNextFileA)
+{
+    HObj *o = h_get(ARG(0), H_FIND); if (!o) { w32_set_last_error(c, 6); RET(0, 2); }
+    Find *fd = o->p;
+    if (fd->pos >= fd->n) { w32_set_last_error(c, 18); RET(0, 2); }
+    fill_find(fd, fd->names[fd->pos++], ARG(1)); RET(1, 2);
+}
+IMPL(kernel32, FindClose)
+{
+    HObj *o = h_get(ARG(0), H_FIND); if (!o) RET(0, 1);
+    Find *fd = o->p; for (int k = 0; k < fd->n; k++) free(fd->names[k]);
+    free(fd->names); free(fd); o->p = 0; h_close(ARG(0)); RET(1, 1);
+}
+
+/* ---- file mappings: the host file is mapped straight into guest memory ---- */
+typedef struct Mapping { int fd; uint32_t size, writable; char name[64]; } Mapping;
+static Mapping *mnamed[32]; static uint32_t mnamed_h[32]; static int nmnamed;
+IMPL(kernel32, CreateFileMappingA)
+{
+    uint32_t fh = ARG(0), prot = ARG(2), lo = ARG(4), name = ARG(5);
+    Mapping *m = calloc(1, sizeof *m); m->writable = (prot & 0x0c) != 0;
+    if (fh == 0xffffffffu) { m->fd = -1; m->size = lo; }              /* pagefile-backed (shared memory) */
+    else {
+        HObj *o = h_get(fh, H_FILE); struct stat st;
+        if (!o) { free(m); w32_set_last_error(c, 6); RET(0, 6); }
+        m->fd = dup(((File *)o->p)->fd); fstat(m->fd, &st);
+        m->size = lo ? lo : (uint32_t)st.st_size;
+        if (m->writable && (uint64_t)st.st_size < m->size) ftruncate(m->fd, m->size);
+    }
+    uint32_t h = h_new(H_MAPPING, m);
+    if (name && nmnamed < 32) { snprintf(m->name, sizeof m->name, "%s", GS(name)); mnamed[nmnamed] = m; mnamed_h[nmnamed++] = h; }
+    w32_set_last_error(c, 0); RET(h, 6);
+}
+IMPL(kernel32, OpenFileMappingA)
+{
+    for (int k = 0; k < nmnamed; k++) if (!strcmp(mnamed[k]->name, GS(ARG(2)))) RET(mnamed_h[k], 3);
+    w32_set_last_error(c, 2); RET(0, 3);
+}
+typedef struct View { uint32_t addr, size; } View;
+static View views[1024]; static int nviews;
+static uint32_t map_view(Ctx *c, uint32_t h, uint32_t access, uint32_t offlo, uint32_t n, uint32_t want)
+{
+    HObj *o = h_get(h, H_MAPPING); if (!o) { w32_set_last_error(c, 6); return 0; }
+    Mapping *m = o->p;
+    if (!n) n = m->size - offlo;
+    uint32_t sz = (n + 0xfff) & ~0xfffu;
+    uint32_t a = vm_alloc(want, sz, 0x3000, (access & 2) ? 4 : 2);
+    if (!a) { w32_set_last_error(c, 8); return 0; }
+    if (m->fd >= 0) {
+        int wr = (access & 2) && m->writable;
+        void *r = mmap(G_MEM + a, sz, PROT_READ | PROT_WRITE, MAP_FIXED | (wr ? MAP_SHARED : MAP_PRIVATE), m->fd, offlo);
+        if (r == MAP_FAILED) { vm_free(a, 0, 0x8000); w32_set_last_error(c, 5); return 0; }
+    }
+    if (nviews < 1024) { views[nviews].addr = a; views[nviews++].size = sz; }
+    return a;
+}
+IMPL(kernel32, MapViewOfFile) { RET(map_view(c, ARG(0), ARG(1), ARG(3), ARG(4), 0), 5); }
+IMPL(kernel32, MapViewOfFileEx) { RET(map_view(c, ARG(0), ARG(1), ARG(3), ARG(4), ARG(5)), 6); }
+IMPL(kernel32, UnmapViewOfFile)
+{
+    uint32_t a = ARG(0);
+    for (int k = 0; k < nviews; k++) if (views[k].addr == a) {
+        msync(G_MEM + a, views[k].size, MS_ASYNC);
+        vm_free(a, 0, 0x8000);                                  /* replaces the file pages with fresh zero pages */
+        views[k] = views[--nviews]; RET(1, 1);
+    }
+    RET(0, 1);
+}
+int w32_file_fd(uint32_t h) { HObj *o = h_get(h, H_FILE); return o ? ((File *)o->p)->fd : -1; }
