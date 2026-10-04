@@ -1586,6 +1586,9 @@ static int override_impl(Ctx *c, uint32_t addr)
     case 0x5a6417:                                    /* Enchantment: move skill points (from, to, amount) */
         if (skills_reversed) { uint32_t f = ARG(0); rt_w32(G_MEM, c->esp + 4, ARG(1)); rt_w32(G_MEM, c->esp + 8, f); }
         return 0;
+    case 0x4e271b:                                    /* UIIntro: start (bool with logos) */
+        if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: intro start (%u)\n", ARG(0) & 0xff);
+        return 0;
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */
