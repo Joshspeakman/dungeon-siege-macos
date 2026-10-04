@@ -68,6 +68,7 @@ Not done yet, or simplified:
   (tested on one Mac); playing together with other players has not been tested yet. In the staging area,
   "Import DS Character..." offers your Dungeon Siege characters and "Import DS LOA Character..." your Legends of
   Aranna ones.
+- Not yet done: set-item bonuses, backpacks, the Voice Overs options' effect, and the "Attack Area" key (Shift).
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
