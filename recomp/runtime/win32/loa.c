@@ -137,13 +137,23 @@ static void GoActor_GetGenericStateCasterGoid(Ctx *c)
     uint32_t node = rt_r32(G_MEM, it), r = node == rt_r32(G_MEM, THIS + 0x4c) ? rt_r32(G_MEM, 0x7a1324u) : rt_r32(G_MEM, node + 0x1c);
     scratch_end(c, esp); RET(r, 1);
 }
-static void GoActor_RSCopySkills(Ctx *c)             /* (GoActor const& from, float multiplier): the attributes */
+/* skills: a vector of 0x48-byte entries at GoActor +0x18/+0x1c: name (string, its text pointer first), natural level
+ * +0x34, bonus from modifiers +0x38 */
+static uint32_t skill_entry(uint32_t actor, const char *name)
 {
-    uint32_t from = ARG(0); float k = ARGF(1); uint32_t get = FX("?GetSkillLevel@GoActor@@QBEMPBD@Z");
-    static uint32_t names; if (!names) { names = heap_alloc(w32_process_heap, 8, 64); strcpy((char *)GP(names), "strength"); strcpy((char *)GP(names + 16), "dexterity"); strcpy((char *)GP(names + 32), "intelligence"); }
-    uint32_t v[3];
-    for (int i = 0; i < 3; i++) { uint32_t n = names + 16 * (uint32_t)i; v[i] = fbits((float)ext_thiscall_f(c, get, from, 1, &n) * k); }
-    ext_thiscall(c, FX("?RCSetSkillLevels@GoActor@@QAEXMMM@Z"), THIS, 3, v);
+    for (uint32_t e = rt_r32(G_MEM, actor + 0x18), end = rt_r32(G_MEM, actor + 0x1c); e && e < end; e += 0x48) {
+        uint32_t p = rt_r32(G_MEM, e); if (p && !strcasecmp(GS(p), name)) return e;
+    }
+    return 0;
+}
+static void GoActor_RSCopySkills(Ctx *c)             /* (GoActor const& from, float multiplier): every skill's natural level */
+{
+    uint32_t from = ARG(0); float k = ARGF(1);
+    for (uint32_t e = rt_r32(G_MEM, from + 0x18), end = rt_r32(G_MEM, from + 0x1c); e && e < end; e += 0x48) {
+        uint32_t p = rt_r32(G_MEM, e); if (!p) continue;
+        uint32_t d = skill_entry(THIS, GS(p)); if (d) rt_wf32(G_MEM, d + 0x34, rt_rf32(G_MEM, e + 0x34) * k);
+    }
+    modifiers_dirty(c, COMP_GO(THIS));
     RET(0, 2);
 }
 
@@ -226,7 +236,11 @@ static void WorldFx_GetPosition(Ctx *c) { RET(0, 2); }      /* (SFx script, Sieg
 /* ---- GoAspect ---- */
 static void GoAspect_SetRenderScaleMultiplier(Ctx *c) { rt_wf32(G_MEM, THIS + 0x1c, ARGF(0)); RET(0, 1); }   /* scale_multiplier */
 static void GoAspect_HasAspectHandle(Ctx *c) { RET(rt_r32(G_MEM, THIS + 0x34) != 0, 0); }
-static void GoAspect_GetNumSubTextures(Ctx *c) { RET(1, 0); }
+static void GoAspect_GetNumSubTextures(Ctx *c)        /* the model's texture count (aspect +0x38 -> model -> +0x3c) */
+{
+    uint32_t inst = rt_r32(G_MEM, THIS + 0x38), shared = inst ? rt_r32(G_MEM, inst) : 0;
+    RET(shared ? rt_r32(G_MEM, shared + 0x3c) : 1, 0);
+}
 static void GoAspect_SetDamageTaker(Ctx *c) { side_set(THIS, S_DAMAGE_TAKER, ARG(0)); RET(0, 1); }
 static void GoAspect_ClearDamageTaker(Ctx *c) { side_set(THIS, S_DAMAGE_TAKER, 0); RET(0, 0); }
 static void GoAspect_SSetIsSetItem(Ctx *c) { side_set(THIS, S_IS_SET_ITEM, ARG(0) & 0xff); RET(0, 1); }
@@ -273,7 +287,19 @@ static void GoInventory_GetActiveSpellBook(Ctx *c)    /* one set by SetActiveSpe
     RET(r, 0);
 }
 static void GoInventory_SetActiveSpellBook(Ctx *c) { side_set(THIS, S_SPELLBOOK, ARG(0)); RET(0, 1); }
-static void GoInventory_IsNonAggressivePack(Ctx *c) { RET(ext_thiscall(c, FX("?IsPackOnly@GoInventory@@QBE_NXZ"), THIS, 0, 0) & 0xff, 0); }
+/* template fields the base engine does not use itself, read by name from the object's template */
+static int go_template_bool(Ctx *c, uint32_t go, const char *comp, const char *field, int dflt)
+{
+    if (!go) return dflt;
+    uint32_t esp = c->esp, t = scratch(c, 96); snprintf((char *)GP(t), 32, "%s", comp); snprintf((char *)GP(t + 32), 64, "%s", field);
+    uint32_t a[3] = {t, t + 32, (uint32_t)dflt}; int r = ext_thiscall(c, FX("?GetComponentBool@Go@@QAE_NPBD0_N@Z"), go, 3, a) & 0xff;
+    scratch_end(c, esp); return r;
+}
+static void GoInventory_IsNonAggressivePack(Ctx *c)    /* pack mules don't fight; the expansion's pack animals do */
+{
+    int pack = ext_thiscall(c, FX("?IsPackOnly@GoInventory@@QBE_NXZ"), THIS, 0, 0) & 0xff;
+    RET(pack && go_template_bool(c, COMP_GO(THIS), "inventory", "is_nonaggressive_pack", 1), 0);
+}
 static void GoInventory_SSetDirtySetItem(Ctx *c) { RET(0, 2); }
 static void GoInventory_TestGet1(Ctx *c) { uint32_t a = ARG(0); RET(ext_thiscall(c, FX("?TestGet@GoInventory@@QBE_NPBUGoid_@@@Z"), THIS, 1, &a) & 0xff, 1); }
 static void GoInventory_TestGet2(Ctx *c) { uint32_t a[2] = {ARG(0), ARG(1)}; RET(ext_thiscall(c, FX("?TestGet@GoInventory@@QBE_NPBUGoid_@@_N@Z"), THIS, 2, a) & 0xff, 2); }
@@ -294,13 +320,94 @@ static void Player_GetParty(Ctx *c)
     uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
     RET(server ? ext_thiscall(c, FX("?GetScreenParty@Server@@QAEPAVGo@@XZ"), server, 0, 0) : 0, 0);
 }
-static void TimeOfDay_SetRealMinutesModifier(Ctx *c) { side_set(THIS, S_REAL_MINUTES, ARG(0)); RET(0, 1); }
+/* TimeOfDay +0: real seconds per game minute (Update adds real time at +4); the modifier scales the template's rate */
+static void TimeOfDay_SetRealMinutesModifier(Ctx *c)
+{
+    uint32_t base = side_get(THIS, S_REAL_MINUTES, 0);
+    if (!base) { base = rt_r32(G_MEM, THIS); side_set(THIS, S_REAL_MINUTES, base); }
+    float m = ARGF(0); if (m > 0.01f) rt_wf32(G_MEM, THIS, bitsf(base) * m);
+    RET(0, 1);
+}
 static void UIGame_SetGameInputBinderActive(Ctx *c) { RET(0, 1); }
 static void WorldMap_GetUsingPlayerJournal(Ctx *c) { RET(0, 0); }
-static void UIPartyManager_RedistributePotions(Ctx *c) { RET(0, 2); }
+/* a FuBi enum constant by name: the specs FuBi registers form a list (head 0x79cf38, next +0x28) of
+ * {name, ..., ToString +0xc, ..., begin +0x1c, end +0x20} */
+static int fubi_enum(Ctx *c, const char *type, const char *name, uint32_t *out)
+{
+    for (uint32_t sp = rt_r32(G_MEM, 0x79cf38u); sp; sp = rt_r32(G_MEM, sp + 0x28)) {
+        uint32_t n = rt_r32(G_MEM, sp); if (!n || strcmp(GS(n), type)) continue;
+        uint32_t to_string = rt_r32(G_MEM, sp + 0xc), b = rt_r32(G_MEM, sp + 0x1c), e = rt_r32(G_MEM, sp + 0x20);
+        for (uint32_t v = b; v < e; v++) {
+            uint32_t r = w32_callback(c, to_string, 1, &v);
+            if (r && !strcasecmp(GS(r), name)) { *out = v; return 1; }
+        }
+    }
+    return 0;
+}
+
+/* UIPartyManager::RedistributePotions(bool, Goid except): health and mana potions shared evenly among the conscious
+ * party members (pack mules hand theirs out; the given member is left out) */
+static int redistribute_potions(Ctx *c, uint32_t except);
+static void UIPartyManager_RedistributePotions(Ctx *c) { RET(redistribute_potions(c, ARG(1)), 2); }
+static int redistribute_potions(Ctx *c, uint32_t except)
+{
+    static uint32_t il_main, ao_reflex, ls_ok; static int init;
+    if (!init) { init = fubi_enum(c, "eInventoryLocation", "il_main", &il_main) && fubi_enum(c, "eActionOrigin", "ao_reflex", &ao_reflex) &&
+                        fubi_enum(c, "eLifeState", "ls_alive_conscious", &ls_ok) ? 1 : -1; }
+    uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
+    uint32_t party = server ? ext_thiscall(c, FX("?GetScreenParty@Server@@QAEPAVGo@@XZ"), server, 0, 0) : 0;
+    if (init < 0 || !party) return 0;
+    uint32_t kids = ext_thiscall(c, FX("?GetChildren@Go@@QBEABUGopColl@@XZ"), party, 0, 0), size = FX("?Size@GopColl@@ABEHXZ"), get = FX("?Get@GopColl@@ABEPAVGo@@H@Z");
+    int n = (int)ext_thiscall(c, size, kids, 0, 0); if (n > 16) n = 16;
+    uint32_t member[16], inv[16]; int receiver[16], m = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t k = (uint32_t)i, g = ext_thiscall(c, get, kids, 1, &k), iv = go_comp(c, g, "?GetInventory@Go@@QAEPAVGoInventory@@XZ"), as = GO_ASPECT(g);
+        if (!g || !iv) continue;
+        int ok = as && ext_thiscall(c, FX("?GetLifeState@GoAspect@@QBE?AW4eLifeState@@XZ"), as, 0, 0) == ls_ok;
+        ok = ok && !(ext_thiscall(c, FX("?IsPackOnly@GoInventory@@QBE_NXZ"), iv, 0, 0) & 0xff) && GO_GOID(g) != except;
+        member[m] = g; inv[m] = iv; receiver[m] = ok; m++;
+    }
+    int nrecv = 0; for (int i = 0; i < m; i++) nrecv += receiver[i];
+    if (!nrecv) return 0;
+    uint32_t coll = ext_thiscall(c, FX("?GetTempGopColl2@AIQuery@@QAEAAUGopColl@@XZ"), w32_callback(c, FX("?FUBI_GetClassSingleton@AIQuery@@CAPAV1@XZ"), 0, 0), 0, 0);
+    for (int kind = 0; kind < 2; kind++) {                 /* health, then mana */
+        uint32_t pot[256], own[256]; int np = 0, have[16] = {0};
+        for (int i = 0; i < m; i++) {
+            ext_thiscall(c, FX("?Clear@GopColl@@AAEXXZ"), coll, 0, 0);
+            uint32_t a[2] = {il_main, coll}; ext_thiscall(c, FX("?ListItems@GoInventory@@QBE_NW4eInventoryLocation@@AAUGopColl@@@Z"), inv[i], 2, a);
+            int ni = (int)ext_thiscall(c, size, coll, 0, 0);
+            for (int j = 0; j < ni && np < 256; j++) {
+                uint32_t k = (uint32_t)j, it = ext_thiscall(c, get, coll, 1, &k);
+                if (!it || !(ext_thiscall(c, FX("?IsPotion@Go@@QBE_NXZ"), it, 0, 0) & 0xff)) continue;
+                uint32_t nm = ext_thiscall(c, FX("?GetTemplateName@Go@@QBEPBDXZ"), it, 0, 0);
+                if (!nm || !strcasestr(GS(nm), kind ? "mana" : "health")) continue;
+                pot[np] = it; own[np] = (uint32_t)i; np++; have[i]++;
+            }
+        }
+        int share = np / nrecv, extra = np % nrecv, want[16];
+        for (int i = 0; i < m; i++) { want[i] = receiver[i] ? share + (extra > 0) : 0; if (receiver[i] && extra > 0) extra--; }
+        for (int p = 0; p < np; p++) {                    /* move surplus potions to whoever is short */
+            int from = (int)own[p]; if (have[from] <= want[from]) continue;
+            for (int to = 0; to < m; to++) {
+                if (have[to] >= want[to]) continue;
+                uint32_t ca[3] = {pot[p], il_main, 0};
+                if (!(ext_thiscall(c, FX("?CanAdd@GoInventory@@QBE_NPBVGo@@W4eInventoryLocation@@_N@Z"), inv[to], 3, ca) & 0xff)) continue;
+                uint32_t ta[5] = {pot[p], member[to], il_main, ao_reflex, 0};
+                ext_thiscall(c, FX("?RSTransfer@GoInventory@@QAEPAUCookie__@FuBi@@PAVGo@@0W4eInventoryLocation@@W4eActionOrigin@@_N@Z"), inv[from], 5, ta);
+                have[from]--; have[to]++; break;
+            }
+        }
+    }
+    return 1;
+}
 static void GoCommon_SToggleTriggeredEffects(Ctx *c) { RET(0, 2); }
 static void GoDb_SRemoveEnchantments(Ctx *c) { RET(0, 3); }
-static void Rules_RSSetNaturalSkillLevel(Ctx *c) { RET(0, 3); }
+static void Rules_RSSetNaturalSkillLevel(Ctx *c)    /* (Goid, const char* skill, float level) */
+{
+    uint32_t go = goid_go(c, ARG(0)), actor = GO_ACTOR(go), e = actor ? skill_entry(actor, GS(ARG(1))) : 0;
+    if (e) { rt_wf32(G_MEM, e + 0x34, ARGF(2)); modifiers_dirty(c, go); }
+    RET(0, 3);
+}
 
 /* ---- jat_approach: the expansion's new AI job ("move near an object"), job type 33 after the base engine's 33 ----
  * The job types' names come from ToString/FromString (overridden for 33), FuBi learns the constants from the enum's
@@ -356,6 +463,25 @@ static int ui_wrap(Ctx *c, uint32_t fn, int nargs)
 int loa_override(Ctx *c, uint32_t addr)
 {
     switch (addr) {
+    case 0x5abf1e: {                                  /* Rules::ChangeLife(Goid, float delta, DWORD): damage transference */
+        static int inside; if (inside || bitsf(ARG(1)) >= 0) return 0;
+        uint32_t aspect = GO_ASPECT(goid_go(c, ARG(0))), taker = aspect ? side_get(aspect, S_DAMAGE_TAKER, 0) : 0;
+        if (!taker || !goid_go(c, taker)) return 0;
+        inside = 1; uint32_t a[3] = {taker, ARG(1), ARG(2)}; ext_thiscall(c, addr, c->ecx, 3, a); inside = 0;
+        c->esp += 4 + 12; return 1;
+    }
+    case 0x5d281f: {                                  /* Job* GoMind::SDoJob(const JobReq&): frozen minds take no movement jobs */
+        if (side_get(c->ecx, S_ALLOW_MOVE, 1)) return 0;
+        uint32_t jat = rt_r32(G_MEM, ARG(0));         /* JobReq::m_Jat */
+        if (jat != 25 && jat != 19 && jat != 26 && jat != 18 && jat != JAT_APPROACH) return 0;   /* move, follow, patrol, flee, approach */
+        c->eax = 0; c->esp += 8; return 1;
+    }
+    case 0x4f0b34: {                                  /* the in-game interface's commands (UI "notify" messages) */
+        uint32_t p = rt_r32(G_MEM, ARG(0)); const char *m = p ? GS(p) : "";
+        if (!strcmp(m, "redistribute_potions")) redistribute_potions(c, 0);
+        else return 0;                                /* the base engine's own commands */
+        c->esp += 4 + 8; return 1;
+    }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */

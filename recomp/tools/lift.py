@@ -40,6 +40,9 @@ OVERRIDES = {
     0x005e179b: 'AIQuery::Is(Go const*, Go const*, eQueryTrait)',
     0x006dec5c: 'UIShell::ShowInterface(const gpstring&)',
     0x006dee75: 'UIShell::ShowGroup(const char*, bool, bool, const char*)',
+    0x005d281f: 'GoMind::SDoJob(const JobReq&)',
+    0x005abf1e: 'Rules::ChangeLife(Goid, float, DWORD)',
+    0x004f0b34: 'UIGame GUI callback (const gpstring& message, UIWindow&)',
 }
 
 class Unsupported(Exception): pass
