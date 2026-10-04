@@ -19,8 +19,9 @@ troubleshooting.
 ## Features
 
 - **Native performance** at your display's resolution and refresh rate, with steady frame pacing.
-- **A launch window** in the game's style for resolution, **view distance** and frame rate. Your choices are remembered,
-  so normally you just press Play.
+- **A launch window** in the game's style for single player or multiplayer, resolution, **view distance** and frame
+  rate. Your choices are remembered, so normally you just press Play.
+- **Multiplayer** on LAN and over the internet, compatible with DirectPlay on Windows, plus the Yesterhaven map.
 - **Built-in view distance** from the original up to 300%, without mods (150% matches the community SeeFar mod).
 - **The game's own sound system** (Miles), recompiled as well, playing through Core Audio.
 - Mouse, trackpad and keyboard, saving and loading, the full single-player campaign.
@@ -42,8 +43,8 @@ and on complete routines. Details: [recomp/README.md](recomp/README.md).
 ## Status
 
 - Single-player campaign: playable.
-- Multiplayer: not yet. The plan, including playing together with Windows players, is in
-  [docs/MULTIPLAYER-PLAN.md](docs/MULTIPLAYER-PLAN.md).
+- Multiplayer: LAN and internet games, including Yesterhaven, with Mac and Windows players (Windows compatibility
+  not yet tested): [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 - Only the GOG release 1.11.1 is supported; *Legends of Aranna* is not supported yet.
 
 ## Legal

@@ -1,6 +1,8 @@
 #!/bin/bash
 # install.sh --game-dir <GOG "Dungeon Siege" folder> [--app-dir DIR] [--data-dir DIR]
 # install.sh --gog-installer <setup_dungeon_siege_*.exe>      (GOG offline installer; needs: brew install innoextract)
+# install.sh --yesterhaven <folder>    adds Gas Powered Games' Yesterhaven multiplayer map (Yesterhaven.dsmap and
+#                                      Yesterhaven.dsres, found anywhere under <folder>); on its own or with the above
 #
 # Builds the natively recompiled Dungeon Siege from your own copy of the GOG 1.11.1 game and installs
 # "Dungeon Siege Native.app" (no Wine, no Rosetta). The game folder is only read: settings, saves and logs go to the
@@ -8,13 +10,30 @@
 # installs capstone and unicorn with pip into recomp/.venv).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GAME=""; GOG_EXE=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+GAME=""; GOG_EXE=""; YH=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
 while [ $# -gt 0 ]; do
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
+    --yesterhaven) YH="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
   esac
 done
+# Yesterhaven: the map and its resources go to the data folder's overlay of the game folder (<data>/game), which the
+# game sees as its own Maps and Resources folders; the game folder itself is not touched
+yesterhaven() {
+  local m r; m="$(find "$YH" -iname Yesterhaven.dsmap -print -quit 2>/dev/null)"; r="$(find "$YH" -iname Yesterhaven.dsres -print -quit 2>/dev/null)"
+  [ -n "$m" ] && [ -n "$r" ] || { echo "Yesterhaven.dsmap and Yesterhaven.dsres not found under $YH"; exit 1; }
+  for f in "$m" "$r"; do   # Dungeon Siege archives ("DSigTank") made for Yesterhaven
+    [ "$(head -c 8 "$f")" = DSigTank ] && head -c 4096 "$f" | LC_ALL=C tr -d '\000' | LC_ALL=C grep -a Yesterhaven >/dev/null || { echo "$f is not a Yesterhaven archive"; exit 1; }
+  done
+  mkdir -p "$DATA/game/Maps" "$DATA/game/Resources"
+  cp "$m" "$DATA/game/Maps/Yesterhaven.dsmap"; cp "$r" "$DATA/game/Resources/Yesterhaven.dsres"
+  echo "== Yesterhaven installed in $DATA/game: host a multiplayer game and choose it under Map Settings"
+}
+if [ -n "$YH" ]; then
+  yesterhaven
+  [ -n "$GAME$GOG_EXE" ] || exit 0
+fi
 if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; the app reads the game from there
   [ -f "$GOG_EXE" ] || { echo "no such file: $GOG_EXE"; exit 1; }
   command -v innoextract >/dev/null || { echo "innoextract is needed for --gog-installer: brew install innoextract"; exit 1; }

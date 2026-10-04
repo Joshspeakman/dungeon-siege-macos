@@ -22,6 +22,7 @@ recomp/build.sh "/path/to/Dungeon Siege/DungeonSiege.exe"     # -> recomp/work/f
 | Bink video | not needed: the GOG release ships no videos and never calls Bink (stubs kept) |
 | Structured exception handling incl. `__except` blocks (landing pads in the 39 functions that use them) | working |
 | App bundle + installer (`../install.sh`), launch window (`host/launcher.m`) | working |
+| DirectPlay 8 client/server and TCP/IP provider (`runtime/win32/dpnet.c`, `dp8proto.c`), from Microsoft's protocol specifications; WSOCK32 host name and addresses | working between copies of the app; not yet tested against Windows (`../docs/MULTIPLAYER.md`) |
 
 The recompiled game runs on Apple Silicon without Wine or Rosetta: intro, menus, new games, loading and saving, the
 campaign, with no optimisation of the recompiled code yet.
@@ -138,7 +139,8 @@ last bits; arithmetic, square roots, rounding and conversions follow the 53-bit 
 - **SEH:** access violations and RaiseException are dispatched through the game's handlers; "continue execution",
   "continue search" and "execute the __except block" work for `_except_handler3` frames. C++ `catch` continuations
   (`__CxxFrameHandler`) are not handled yet; the game throws C++ exceptions only in error paths.
-- **Not supported:** multiplayer (DirectPlay 8 is not implemented yet; see `../docs/MULTIPLAYER-PLAN.md`); controllers.
+- **Not supported:** controllers. DirectPlay sends everything reliably (the game asks for guaranteed delivery anyway),
+  and only client/server sessions exist (the game uses no peer-to-peer).
 - **x87 tag word** is not modelled: a stack overflow/underflow gives a stale register instead of the NaN real hardware
   produces (the game's code is not expected to do this).
 - **Threads** run in parallel on real cores. `lock`-prefixed instructions are atomic; the game is told the real core

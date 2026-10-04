@@ -9,7 +9,8 @@ Used at build time (installed into `recomp/.venv` with pip, not redistributed he
   https://www.unicorn-engine.org/
 
 Specifications and prior work this project learned from:
-- Microsoft's published DirectPlay 8 protocol specifications ([MC-DPL8CS], [MC-DPL8R]) for the planned multiplayer.
+- Microsoft's published Open Specifications for DirectPlay 8 ([MC-DPL8CS], [MC-DPL8R], [MC-DPLHP]), from which the
+  multiplayer's network protocol is implemented; `recomp/tests/dp8test.c` uses their example packets.
 - **SiegeFX** (GPL-3.0) and **OpenSiege** (GPL-3.0), open-source reimplementations of the engine; no code was taken
   from them.
 - `src/dsr/dsr_snapshot.bin` records the device capabilities reported by Wine's DirectDraw implementation (Wine,

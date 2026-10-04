@@ -1,9 +1,13 @@
-// The launch window: resolution, view distance and frame rate, remembered in <data>/launcher.plist, then Play.
+// The launch window: resolution, view distance, frame rate and single player or multiplayer, remembered in
+// <data>/launcher.plist, then Play.
 // Its look comes from the game itself, read at launch from the player's own Resources/Objects.dsres (the main menu's
 // stone wall, leather plaque, brass trim and wooden buttons) and set in Copperplate, the typeface of the game's UI.
 // Nothing from the game is stored in this project; without the archive the window falls back to plain colours.
 #import <AppKit/AppKit.h>
 #include <zlib.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 
 // ---------------------------------------------------------------- reading textures from a tank (.dsres) archive
 static NSData *tank_read(NSString *tankPath, NSString *want)
@@ -292,14 +296,43 @@ static NSArray<NSDictionary *> *framerate_choices(void)
     [a addObject:@{@"value": @"unlimited", @"label": @"Unlimited", @"note": @"No cap and no vertical sync (may tear)"}];
     return a;
 }
+/* the addresses other players type to join this Mac: its LAN address and, if there is one, a 100.64/10 address
+ * (Tailscale and similar virtual networks) */
+static NSString *join_addresses(void)
+{
+    NSString *lan = nil, *vpn = nil; struct ifaddrs *ifs = 0;
+    if (!getifaddrs(&ifs)) {
+        for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
+            if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || !(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
+            uint32_t a = ntohl(((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr);
+            char ip[64]; inet_ntop(AF_INET, &((struct sockaddr_in *)i->ifa_addr)->sin_addr, ip, sizeof ip);
+            if ((a >> 22) == (100u << 2 | 1)) { if (!vpn) vpn = @(ip); }                       /* 100.64.0.0/10 */
+            else if (((a >> 24) == 10 || (a >> 20) == 0xac1 || (a >> 16) == 0xc0a8) && !lan) lan = @(ip);   /* private ranges */
+        }
+        freeifaddrs(ifs);
+    }
+    if (lan && vpn) return [NSString stringWithFormat:@"This Mac: %@ · VPN %@", lan, vpn];
+    if (lan || vpn) return [NSString stringWithFormat:@"This Mac: %@", lan ?: vpn];
+    return nil;
+}
+static NSArray<NSDictionary *> *mode_choices(void)
+{
+    NSString *ip = join_addresses();
+    return @[@{@"value": @"single", @"label": @"Single Player", @"note": @"The Kingdom of Ehb campaign"},
+             @{@"value": @"multi", @"label": @"Multiplayer", @"note": ip ?: @"LAN and internet games, with Mac and Windows players"}];
+}
 static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dflt)
 {
     for (NSUInteger k = 0; k < c.count; k++) if ([c[k][@"value"] isEqualToString:v ?: @""]) return (NSInteger)k;
     return dflt;
 }
 /* the chosen settings as environment for the runtime (read later at start-up) */
-static void apply(NSString *res, NSString *dist, NSString *fps)
+static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode)
 {
+    if ([mode isEqualToString:@"multi"]) {   /* the game's own switch for its multiplayer screens */
+        const char *old = getenv("DS_ARGS"); NSString *args = old && *old ? [NSString stringWithFormat:@"%s zonematch=true", old] : @"zonematch=true";
+        if (!(old && strstr(old, "zonematch"))) setenv("DS_ARGS", args.UTF8String, 1);
+    }
     setenv("DS_RESOLUTION", res.UTF8String, 1);
     setenv("DS_DRAW_DISTANCE", dist.UTF8String, 1);
     if ([fps isEqualToString:@"unlimited"]) { setenv("DSR_FPSCAP", "0", 1); setenv("DSR_VSYNC", "0", 1); }
@@ -312,18 +345,19 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
     NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"];
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
-    DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new];
+    DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new], *mode = [DSRow new];
     res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
     dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], 2);
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
+    mode.title = @"Game"; mode.choices = mode_choices(); mode.index = index_of(mode.choices, saved[@"mode"], 0);
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
-        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"]);
+        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"]);
         return 1;
     }
 
-    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 552)];
-    v.rows = @[res, dist, fps]; v.hover = v.pressed = HIT_NONE;
+    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 626)];
+    v.rows = @[mode, res, dist, fps]; v.hover = v.pressed = HIT_NONE;
     NSString *tank = [@(game_dir) stringByAppendingPathComponent:@"Resources/Objects.dsres"], *m = @"art/bitmaps/gui/front_end/menus/main/b_gui_fe_m_mn_3d_";
     CGImageRef stone = raw_image(tank_read(tank, [m stringByAppendingString:@"background-05.raw"]));
     CGImageRef bars = raw_image(tank_read(tank, [m stringByAppendingString:@"menubars.raw"]));
@@ -355,8 +389,8 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [NSApp runModalForWindow:w];
     [w orderOut:nil];
     if (!result) return 0;
-    NSString *rv = res.choices[res.index][@"value"], *dv = dist.choices[dist.index][@"value"], *fv = fps.choices[fps.index][@"value"];
-    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv);
+    NSString *rv = res.choices[res.index][@"value"], *dv = dist.choices[dist.index][@"value"], *fv = fps.choices[fps.index][@"value"], *mv = mode.choices[mode.index][@"value"];
+    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv} writeToFile:plistPath atomically:YES];
+    apply(rv, dv, fv, mv);
     return 1;
 }

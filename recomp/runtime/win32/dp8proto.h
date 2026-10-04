@@ -42,4 +42,5 @@ size_t dp8_enc_cframe(uint8_t *out, uint8_t cmd, uint8_t op, uint8_t msgid, uint
 size_t dp8_enc_sack(uint8_t *out, uint8_t retry_flag, uint8_t nseq, uint8_t nrcv, uint32_t ts, uint64_t sack_mask);
 size_t dp8_enc_dframe(uint8_t *out, uint8_t cmd, uint8_t ctl, uint8_t seq, uint8_t nrcv, uint64_t sack_mask);
 size_t dp8_dec_dframe(const uint8_t *p, size_t len, dp8_dframe *f);
+int dp8_dec_coalesced(const uint8_t *p, size_t len, void (*fn)(void *, uint8_t user, const uint8_t *, size_t), void *ctx);
 #endif
