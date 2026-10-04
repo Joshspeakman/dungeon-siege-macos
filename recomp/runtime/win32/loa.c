@@ -1586,6 +1586,23 @@ static int override_impl(Ctx *c, uint32_t addr)
     case 0x5a6417:                                    /* Enchantment: move skill points (from, to, amount) */
         if (skills_reversed) { uint32_t f = ARG(0); rt_w32(G_MEM, c->esp + 4, ARG(1)); rt_w32(G_MEM, c->esp + 8, f); }
         return 0;
+    case 0x412d12: {                                  /* ReportSys Context::OutputF(ctx, fmt, ...): DS_REPORTLOG shows reports */
+        if (!getenv("DS_REPORTLOG")) return 0;
+        uint32_t f = ARG(1); const char *fmt = f ? GS(f) : ""; char out[4096]; size_t o = 0; int ai = 2;
+        for (const char *q = fmt; *q && o < sizeof out - 512; q++) {
+            if (*q != '%') { out[o++] = *q; continue; }
+            q++; while (*q && strchr("0123456789.-#l", *q)) q++;
+            uint32_t v = ARG(ai++);
+            if (*q == 's') o += (size_t)snprintf(out + o, 400, "%s", v ? GS(v) : "(null)");
+            else if (*q == 'S') { for (uint32_t w = v; w && rt_r16(G_MEM, w) && o < sizeof out - 8; w += 2) out[o++] = (char)rt_r16(G_MEM, w); }
+            else o += (size_t)snprintf(out + o, 40, "0x%x", v);
+        }
+        out[o] = 0; fprintf(stderr, "report: %s\n", out);
+        for (int i = 2; i < 9; i++) { uint32_t v = ARG(i); fprintf(stderr, "report arg %d: %08x", i, v);
+            if (v > 0x10000 && v < 0xf0000000u) { char a8[48] = ""; for (int k = 0; k < 40; k++) { uint8_t ch = G_MEM[v + (uint32_t)k]; a8[k] = ch >= 32 && ch < 127 ? (char)ch : '.'; } fprintf(stderr, " [%s]", a8); }
+            fprintf(stderr, "\n"); }
+        return 0;
+    }
     case 0x4e271b:                                    /* UIIntro: start (bool with logos) */
         if (getenv("DS_EXTLOG")) fprintf(stderr, "loa: intro start (%u)\n", ARG(0) & 0xff);
         return 0;
