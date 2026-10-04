@@ -67,6 +67,7 @@ OVERRIDES = {
     0x005a4d17: 'Enchantment: apply its alteration',
     0x005a6417: 'Enchantment: move skill points (from, to, amount)',
     0x004e271b: 'UIIntro: start the intro (bool: with the logos)',
+    0x00412d12: 'ReportSys::Context::OutputF(fmt, ...)',
 }
 
 class Unsupported(Exception): pass

@@ -21,6 +21,8 @@ static int ci_lookup(const char *dir, const char *name, char *out, size_t cap)
 }
 char w32_game_overlay[1024];          /* writes to the game folder land here ("" = write in place) */
 int w32_import_from_ds1;               /* see w32_host_path */
+int w32_loa_docs;                      /* the expansion is played: Documents\\Dungeon Siege is Documents\\Dungeon Siege LOA
+                                        * (separate from w32_game_layer, which w32_host_dirs switches off pass by pass) */
 char w32_game_layer[1024];            /* read-only layer between the overlay and the game folder: the expansion's data
                                        * (Resources/, Maps/) when Legends of Aranna is played; "" = none */
 static int exists(const char *p) { struct stat st; return !stat(p, &st); }
@@ -69,7 +71,7 @@ int w32_host_path(const char *win, char *out, size_t cap, int mode)
     /* Legends of Aranna keeps its settings, characters and saves in Documents\Dungeon Siege LOA, as the original does
      * (the base engine names the folder "Dungeon Siege"); its "Import DS Character" list reads Dungeon Siege's own saves */
     extern int w32_import_from_ds1;
-    if (*w32_game_layer && np >= 4 && !strcasecmp(parts[0], "Users") && !strcasecmp(parts[2], "Documents") && !strcasecmp(parts[3], "Dungeon Siege") &&
+    if (w32_loa_docs && np >= 4 && !strcasecmp(parts[0], "Users") && !strcasecmp(parts[2], "Documents") && !strcasecmp(parts[3], "Dungeon Siege") &&
         !(w32_import_from_ds1 && np >= 5 && !strcasecmp(parts[4], "Save")))
         parts[3] = (char *)"Dungeon Siege LOA";
     if (!(np >= 2 && !strncasecmp(norm, GAME_PREFIX, gl) && (norm[gl] == 0 || norm[gl] == '\\'))) {
@@ -169,13 +171,15 @@ static int host(Ctx *c, uint32_t win, char *out, int create)
 IMPL(kernel32, GetFileAttributesA)
 {
     char p[2048]; struct stat st;
-    if (host(c, ARG(0), p, 0) || stat(p, &st)) { w32_set_last_error(c, 2); RET(0xffffffffu, 1); }
+    if (host(c, ARG(0), p, 0) || stat(p, &st)) { if (getenv("W32_DIRLOG")) fprintf(stderr, "w32: GetFileAttributes(%s) missing\n", GS(ARG(0))); w32_set_last_error(c, 2); RET(0xffffffffu, 1); }
+    if (getenv("W32_DIRLOG")) fprintf(stderr, "w32: GetFileAttributes(%s) -> %s\n", GS(ARG(0)), p);
     RET(S_ISDIR(st.st_mode) ? 0x10 : (st.st_mode & S_IWUSR) ? 0x20 : 0x21, 1);
 }
 IMPL(kernel32, SetFileAttributesA) { char p[2048]; struct stat st; RET(!host(c, ARG(0), p, 0) && !stat(p, &st), 2); }
 IMPL(kernel32, CreateDirectoryA)
 {
     char p[2048]; if (host(c, ARG(0), p, 1)) RET(0, 2);
+    if (getenv("W32_DIRLOG")) fprintf(stderr, "w32: CreateDirectory(%s) -> %s\n", GS(ARG(0)), p);
     if (mkdir(p, 0755)) { w32_set_last_error(c, errno == EEXIST ? 183 : 3); RET(0, 2); }
     RET(1, 2);
 }
@@ -313,8 +317,15 @@ IMPL(kernel32, GetFileTime)
 IMPL(kernel32, FlushFileBuffers) { RET(h_get(ARG(0), H_FILE) != 0, 1); }
 
 /* ---- directory enumeration (case-insensitive name order, "." and ".." first, like NTFS) ---- */
-typedef struct Find { char dir[3][1024]; int ndir; char **names; int n, pos; } Find;
+typedef struct Find { char dir[3][1024]; int ndir; char **names; int n, pos, docs; } Find;   /* docs: see FindFirstFileA */
 static int ci_cmp(const void *a, const void *b) { return strcasecmp(*(char *const *)a, *(char *const *)b); }
+static void fill_find(Find *fd, const char *name, uint32_t out);
+static void find_fill(Find *fd, const char *name, uint32_t out)          /* the entry, under the name the game sees */
+{
+    fill_find(fd, name, out);
+    if (fd->docs && !strcasecmp(name, "Dungeon Siege LOA")) snprintf((char *)GP(out + 44), 260, "Dungeon Siege");   /* cFileName */
+    if (getenv("W32_DIRLOG")) fprintf(stderr, "w32:   entry %s (attr %x)\n", (char *)GP(out + 44), rt_r32(G_MEM, out));
+}
 static void fill_find(Find *fd, const char *name, uint32_t out)
 {
     char p[2048]; struct stat st; memset(GP(out), 0, 320);
@@ -341,6 +352,11 @@ IMPL(kernel32, FindFirstFileA)
     Find *fd = calloc(1, sizeof *fd); fd->ndir = nd; for (int k = 0; k < nd; k++) snprintf(fd->dir[k], sizeof fd->dir[k], "%s", dirs[k]);
     int cap = 64; fd->names = malloc(cap * sizeof *fd->names);
     const char *pt = !strcmp(pat, "*.*") ? "*" : pat;
+    /* with the expansion, Documents\Dungeon Siege is Documents\Dungeon Siege LOA (see w32_host_path): a listing of
+     * Documents shows that folder under the name "Dungeon Siege" (the game looks for its folder that way) and leaves
+     * out the base game's own */
+    size_t dl = strlen(dirwin);
+    int docs = w32_loa_docs && dl >= 10 && !strcasecmp(dirwin + dl - 10, "\\Documents");
     int is_root = strlen(dirwin) <= 3;
     for (int di = 0; di < nd; di++) {
         DIR *d = opendir(dirs[di]); if (!d) continue;
@@ -348,7 +364,9 @@ IMPL(kernel32, FindFirstFileA)
         while ((e = readdir(d))) {
             if (is_root && (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))) continue;
             if (e->d_name[0] == '.' && strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) continue;    /* host dotfiles */
-            if (fnmatch(pt, e->d_name, FNM_CASEFOLD)) continue;
+            if (docs && !strcasecmp(e->d_name, "Dungeon Siege")) continue;
+            const char *shown = docs && !strcasecmp(e->d_name, "Dungeon Siege LOA") ? "Dungeon Siege" : e->d_name;
+            if (fnmatch(pt, shown, FNM_CASEFOLD)) continue;
             if (w32_hide_seefar && !fnmatch("sf_seefar*.dsres", e->d_name, FNM_CASEFOLD)) continue;   /* built-in draw distance replaces it */
             int dup = 0; for (int j = 0; j < fd->n; j++) if (!strcasecmp(fd->names[j], e->d_name)) { dup = 1; break; }
             if (dup) continue;
@@ -358,8 +376,10 @@ IMPL(kernel32, FindFirstFileA)
         closedir(d);
     }
     qsort(fd->names, (size_t)fd->n, sizeof *fd->names, ci_cmp);       /* "." and ".." sort first */
+    if (getenv("W32_DIRLOG")) fprintf(stderr, "w32: FindFirstFile(%s) pattern %s: %d\n", win, pt, fd->n);
     if (!fd->n) { free(fd->names); free(fd); w32_set_last_error(c, 2); RET(0xffffffffu, 2); }
-    fill_find(fd, fd->names[0], ARG(1)); fd->pos = 1;
+    fd->docs = docs;
+    find_fill(fd, fd->names[0], ARG(1)); fd->pos = 1;
     RET(h_new(H_FIND, fd), 2);
 }
 IMPL(kernel32, FindNextFileA)
@@ -367,7 +387,7 @@ IMPL(kernel32, FindNextFileA)
     HObj *o = h_get(ARG(0), H_FIND); if (!o) { w32_set_last_error(c, 6); RET(0, 2); }
     Find *fd = o->p;
     if (fd->pos >= fd->n) { w32_set_last_error(c, 18); RET(0, 2); }
-    fill_find(fd, fd->names[fd->pos++], ARG(1)); RET(1, 2);
+    find_fill(fd, fd->names[fd->pos++], ARG(1)); RET(1, 2);
 }
 IMPL(kernel32, FindClose)
 {

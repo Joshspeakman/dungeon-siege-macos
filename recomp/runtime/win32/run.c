@@ -20,6 +20,7 @@ int w32_prepare(const char *exe, const char *game_dir, const char *drive_c, cons
     if (exp && *exp) {
         extern char w32_game_layer[1024]; void loa_register(void); int ext_install(void);
         snprintf(w32_game_layer, sizeof w32_game_layer, "%s", exp);
+        extern int w32_loa_docs; w32_loa_docs = 1;
         loa_register(); ext_install();
     }
     w32_seh_init();
