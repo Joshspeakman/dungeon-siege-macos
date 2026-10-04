@@ -73,8 +73,7 @@ Not done yet, or simplified:
   Aranna ones.
 - The "Attack Area" key (Shift) attacks what is under the pointer, or the ground there, like the base game's Attack key;
   the original expansion's exact behaviour may differ.
-- Not done: two rare spell effects, "shrink" (render scale) and moving combat magic to nature magic, which one spell
-  each uses.
+- Not done: one rare spell effect, moving combat magic to nature magic (used by a single spell).
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
