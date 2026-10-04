@@ -20,6 +20,8 @@ static int ci_lookup(const char *dir, const char *name, char *out, size_t cap)
     closedir(d); return ok;
 }
 char w32_game_overlay[1024];          /* writes to the game folder land here ("" = write in place) */
+char w32_game_layer[1024];            /* read-only layer between the overlay and the game folder: the expansion's data
+                                       * (Resources/, Maps/) when Legends of Aranna is played; "" = none */
 static int exists(const char *p) { struct stat st; return !stat(p, &st); }
 static void mkdirs(const char *p)          /* create every missing parent of p */
 {
@@ -72,23 +74,38 @@ int w32_host_path(const char *win, char *out, size_t cap, int mode)
     if (!*w32_game_overlay) { snprintf(out, cap, "%s", base); return 0; }
     char ov[2048]; resolve(w32_game_overlay, parts, 2, np, ov, sizeof ov);
     if (exists(ov)) { snprintf(out, cap, "%s", ov); return 0; }
+    if (*w32_game_layer) {                       /* the expansion layer: read where it has the file */
+        char ly[2048]; resolve(w32_game_layer, parts, 2, np, ly, sizeof ly);
+        struct stat lst;
+        if (!stat(ly, &lst) && (!mode || S_ISDIR(lst.st_mode))) { if (!mode) { snprintf(out, cap, "%s", ly); return 0; } }
+        else if (!stat(ly, &lst) && mode) { snprintf(base, sizeof base, "%s", ly); }   /* written: copied up from the layer */
+    }
     if (!mode) { snprintf(out, cap, "%s", base); return 0; }
     struct stat st;
     if (!stat(base, &st) && S_ISREG(st.st_mode)) copy_file(base, ov); else mkdirs(ov);
     snprintf(out, cap, "%s", ov);
     return 0;
 }
-/* both host directories behind a game-folder directory (overlay first); returns how many exist */
-int w32_host_dirs(const char *win, char dirs[2][2048])
+/* every host directory behind a game-folder directory (overlay, expansion layer, game folder); returns how many exist */
+int w32_host_dirs(const char *win, char dirs[3][2048])
 {
-    char save_ov[1024]; int n = 0;
-    snprintf(save_ov, sizeof save_ov, "%s", w32_game_overlay);
-    if (!w32_host_path(win, dirs[n], 2048, 0) && exists(dirs[n])) n++;
-    if (*save_ov) {
-        w32_game_overlay[0] = 0;
-        if (!w32_host_path(win, dirs[n], 2048, 0) && exists(dirs[n]) && (n == 0 || strcmp(dirs[0], dirs[n]))) n++;
-        snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s", save_ov);
+    char save_ov[1024], save_ly[1024]; int n = 0;
+    snprintf(save_ov, sizeof save_ov, "%s", w32_game_overlay); snprintf(save_ly, sizeof save_ly, "%s", w32_game_layer);
+    /* one pass per layer: overlay only, layer only, game folder only (the others switched off) */
+    for (int pass = 0; pass < 3; pass++) {
+        if (pass == 0 && !*save_ov) continue;
+        if (pass == 1 && !*save_ly) continue;
+        if (pass == 0) { w32_game_layer[0] = 0; }
+        if (pass == 1) { snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s", save_ly); w32_game_layer[0] = 0; }
+        if (pass == 2) { w32_game_overlay[0] = 0; w32_game_layer[0] = 0; }
+        char d[2048];
+        if (!w32_host_path(win, d, sizeof d, 0) && exists(d)) {
+            int dup = 0; for (int j = 0; j < n; j++) if (!strcmp(dirs[j], d)) dup = 1;
+            if (!dup) snprintf(dirs[n++], 2048, "%s", d);
+        }
+        snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s", save_ov); snprintf(w32_game_layer, sizeof w32_game_layer, "%s", save_ly);
     }
+    if (!*save_ov && !n) { if (!w32_host_path(win, dirs[0], 2048, 0) && exists(dirs[0])) n = 1; }
     return n;
 }
 
@@ -155,12 +172,21 @@ IMPL(kernel32, CreateDirectoryA)
     if (mkdir(p, 0755)) { w32_set_last_error(c, errno == EEXIST ? 183 : 3); RET(0, 2); }
     RET(1, 2);
 }
-IMPL(kernel32, RemoveDirectoryA) { char p[2048]; if (host(c, ARG(0), p, 0) || rmdir(p)) { w32_set_last_error(c, 2); RET(0, 1); } RET(1, 1); }
-IMPL(kernel32, DeleteFileA) { char p[2048]; if (host(c, ARG(0), p, 0) || unlink(p)) { w32_set_last_error(c, 2); RET(0, 1); } RET(1, 1); }
+/* deleting or moving only ever touches the data folder: the game folder and the expansion layer are never changed */
+static int writable_path(const char *p)
+{
+    extern char w32_drive_c[1024];
+    size_t a = strlen(w32_drive_c), b = strlen(w32_game_overlay);
+    if (!*w32_game_overlay) return 1;                     /* no overlay: the game runs from a folder it may change */
+    return (a && !strncmp(p, w32_drive_c, a)) || (b && !strncmp(p, w32_game_overlay, b));
+}
+IMPL(kernel32, RemoveDirectoryA) { char p[2048]; if (host(c, ARG(0), p, 0) || !writable_path(p) || rmdir(p)) { w32_set_last_error(c, 2); RET(0, 1); } RET(1, 1); }
+IMPL(kernel32, DeleteFileA) { char p[2048]; if (host(c, ARG(0), p, 0) || !writable_path(p) || unlink(p)) { w32_set_last_error(c, 2); RET(0, 1); } RET(1, 1); }
 IMPL(kernel32, MoveFileA)
 {
     char a[2048], b[2048]; struct stat st;
     if (host(c, ARG(0), a, 0) || host(c, ARG(1), b, 1)) RET(0, 2);
+    if (!writable_path(a)) { w32_set_last_error(c, 5); RET(0, 2); }
     if (!stat(b, &st)) { w32_set_last_error(c, 183); RET(0, 2); }
     if (rename(a, b)) { w32_set_last_error(c, 2); RET(0, 2); }
     RET(1, 2);
@@ -205,7 +231,11 @@ static uint64_t ft_from_ts(struct timespec t)
 IMPL(kernel32, CreateFileA)
 {
     uint32_t access = ARG(1), disp = ARG(4), flags = ARG(5); char p[2048]; struct stat st;
-    if (host(c, ARG(0), p, 1)) RET(0xffffffffu, 7);
+    /* only opens that write (or create/truncate) go to the data folder's overlay of the game folder; plain reads use
+     * the file where it is, so the game's archives are never copied */
+    int writes = (access & (0x40000000u | 0x10000000u)) || disp == 1 || disp == 2 || disp == 5;
+    if (host(c, ARG(0), p, writes)) RET(0xffffffffu, 7);
+    if (!writes && stat(p, &st) && disp == 4 && host(c, ARG(0), p, 1)) RET(0xffffffffu, 7);   /* OPEN_ALWAYS creating it */
     int exists = !stat(p, &st), isdir = exists && S_ISDIR(st.st_mode);
     if (isdir && !(flags & 0x02000000)) { w32_set_last_error(c, 5); RET(0xffffffffu, 7); }
     int of = (access & 0x40000000) ? ((access & 0x80000000) ? O_RDWR : O_WRONLY) : O_RDONLY;
@@ -276,13 +306,12 @@ IMPL(kernel32, GetFileTime)
 IMPL(kernel32, FlushFileBuffers) { RET(h_get(ARG(0), H_FILE) != 0, 1); }
 
 /* ---- directory enumeration (case-insensitive name order, "." and ".." first, like NTFS) ---- */
-typedef struct Find { char dir[1024], dir2[1024]; char **names; int n, pos; } Find;
+typedef struct Find { char dir[3][1024]; int ndir; char **names; int n, pos; } Find;
 static int ci_cmp(const void *a, const void *b) { return strcasecmp(*(char *const *)a, *(char *const *)b); }
 static void fill_find(Find *fd, const char *name, uint32_t out)
 {
     char p[2048]; struct stat st; memset(GP(out), 0, 320);
-    snprintf(p, sizeof p, "%s/%s", fd->dir, name);
-    if (stat(p, &st) && fd->dir2[0]) snprintf(p, sizeof p, "%s/%s", fd->dir2, name);
+    for (int k = 0; k < fd->ndir; k++) { snprintf(p, sizeof p, "%s/%s", fd->dir[k], name); if (!stat(p, &st)) break; }
     if (!stat(p, &st)) {
         rt_w32(G_MEM, out, S_ISDIR(st.st_mode) ? 0x10 : 0x20);
         rt_w64(G_MEM, out + 4, ft_from_ts(st.st_birthtimespec)); rt_w64(G_MEM, out + 12, ft_from_ts(st.st_atimespec));
@@ -299,10 +328,10 @@ IMPL(kernel32, FindFirstFileA)
     char *sl = strrchr(win, '\\'); const char *pat = sl ? sl + 1 : win;
     char dirwin[2048]; if (sl) snprintf(dirwin, sizeof dirwin, "%.*s", (int)(sl - win), win); else snprintf(dirwin, sizeof dirwin, ".");
     if (!*dirwin) snprintf(dirwin, sizeof dirwin, "\\");
-    char dirs[2][2048]; int nd = w32_host_dirs(dirwin, dirs);
+    char dirs[3][2048]; int nd = w32_host_dirs(dirwin, dirs);
     if (!nd) { w32_set_last_error(c, 3); RET(0xffffffffu, 2); }
     (void)p;
-    Find *fd = calloc(1, sizeof *fd); snprintf(fd->dir, sizeof fd->dir, "%s", dirs[0]); snprintf(fd->dir2, sizeof fd->dir2, "%s", nd > 1 ? dirs[1] : "");
+    Find *fd = calloc(1, sizeof *fd); fd->ndir = nd; for (int k = 0; k < nd; k++) snprintf(fd->dir[k], sizeof fd->dir[k], "%s", dirs[k]);
     int cap = 64; fd->names = malloc(cap * sizeof *fd->names);
     const char *pt = !strcmp(pat, "*.*") ? "*" : pat;
     int is_root = strlen(dirwin) <= 3;
