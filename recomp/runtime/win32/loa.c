@@ -895,6 +895,17 @@ static int override_impl(Ctx *c, uint32_t addr)
         intro_fade(c, "maddoc_fade_out"); intro_step(c, c->ecx, "maddoc_fade_out");
         c->esp += 4; return 1;
     }
+    case 0x6fcf19: {                                  /* Messenger::Notify(const gpstring& message, UIWindow*): every UI command */
+        extern int w32_import_from_ds1;
+        uint32_t p = rt_r32(G_MEM, ARG(0)); const char *m = p ? GS(p) : "";
+        if (!strcmp(m, "staging_import_dsx_character")) {   /* "Import DS LOA Character": the base game's import, from the expansion's saves */
+            static uint32_t alias; if (!alias) alias = gpstr(c, "staging_import_character");
+            w32_import_from_ds1 = 0; rt_w32(G_MEM, c->esp + 4, alias);
+        }
+        else if (!strcmp(m, "staging_import_character")) w32_import_from_ds1 = 1;   /* "Import DS Character": Dungeon Siege's saves */
+        else if (!strcasestr(m, "import")) w32_import_from_ds1 = 0;   /* any other command: the import screen is gone */
+        return 0;
+    }
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */

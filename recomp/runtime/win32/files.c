@@ -20,6 +20,7 @@ static int ci_lookup(const char *dir, const char *name, char *out, size_t cap)
     closedir(d); return ok;
 }
 char w32_game_overlay[1024];          /* writes to the game folder land here ("" = write in place) */
+int w32_import_from_ds1;               /* see w32_host_path */
 char w32_game_layer[1024];            /* read-only layer between the overlay and the game folder: the expansion's data
                                        * (Resources/, Maps/) when Legends of Aranna is played; "" = none */
 static int exists(const char *p) { struct stat st; return !stat(p, &st); }
@@ -65,6 +66,13 @@ int w32_host_path(const char *win, char *out, size_t cap, int mode)
     norm[0] = 'c'; norm[1] = ':'; norm[2] = 0; k = 2;
     for (int j = 0; j < np; j++) k += (size_t)snprintf(norm + k, sizeof norm - k, "\\%s", parts[j]);
     size_t gl = strlen(GAME_PREFIX);
+    /* Legends of Aranna's "Import DS Character": its save folder stands for Dungeon Siege's own while that list is open */
+    extern int w32_import_from_ds1;
+    if (w32_import_from_ds1 && np >= 6 && !strcasecmp(parts[0], "Users") && !strcasecmp(parts[2], "Documents") &&
+        !strcasecmp(parts[3], "Legends of Aranna") && !strcasecmp(parts[4], "Dungeon Siege") && !strcasecmp(parts[5], "Save")) {
+        for (int j = 3; j < np - 1; j++) parts[j] = parts[j + 1];
+        np--;
+    }
     if (!(np >= 2 && !strncasecmp(norm, GAME_PREFIX, gl) && (norm[gl] == 0 || norm[gl] == '\\'))) {
         resolve(w32_drive_c, parts, 0, np, out, cap);
         if (mode) mkdirs(out);

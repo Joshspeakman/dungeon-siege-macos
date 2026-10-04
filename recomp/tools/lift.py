@@ -49,6 +49,7 @@ OVERRIDES = {
     0x004b8f1b: 'UIOptions: options screen commands (const gpstring&, UIWindow&)',
     0x004e21c1: 'UIIntro: interface messages (const gpstring&, UIWindow&)',
     0x004e2435: 'UIIntro: a beat is over',
+    0x006fcf19: 'Messenger::Notify(const gpstring&, UIWindow*): every interface command',
 }
 
 class Unsupported(Exception): pass
