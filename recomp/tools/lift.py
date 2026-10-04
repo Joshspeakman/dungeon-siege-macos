@@ -43,6 +43,7 @@ OVERRIDES = {
     0x005d281f: 'GoMind::SDoJob(const JobReq&)',
     0x005abf1e: 'Rules::ChangeLife(Goid, float, DWORD)',
     0x004f0b34: 'UIGame GUI callback (const gpstring& message, UIWindow&)',
+    0x004e72f3: 'UIGame: publish the in-game key commands to the input binder',
 }
 
 class Unsupported(Exception): pass
