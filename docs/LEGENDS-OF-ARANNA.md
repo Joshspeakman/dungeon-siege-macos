@@ -43,6 +43,7 @@ The expansion's new keys work as in the original (its default bindings come from
 | R | Redistribute potions across the party |
 | U | Unsummon party creatures |
 | Y | Untransform party members |
+| Shift | Attack Area |
 
 ## Status
 
@@ -71,7 +72,9 @@ Not done yet, or simplified:
   (tested on one Mac); playing together with other players has not been tested yet. In the staging area,
   "Import DS Character..." offers your Dungeon Siege characters and "Import DS LOA Character..." your Legends of
   Aranna ones.
-- Not yet done: the Voice Overs options' effect, and the "Attack Area" key (Shift).
+- The "Attack Area" key (Shift) attacks what is under the pointer, or the ground there, like the base game's Attack key;
+  the original expansion's exact behaviour may differ.
+- Not yet done: the Voice Overs options' effect.
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 
