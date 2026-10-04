@@ -48,12 +48,14 @@ The expansion's new keys work as in the original (its default bindings come from
 
 Working: the main menu, character creation, the campaign start and its quests and dialogue, the expansion's inventory
 and journal screens, the world map (pieces revealed as you explore, the current area marked), potion redistribution,
-the expansion's AI (new monster behaviour, "approach" jobs, damage transfer), and the Unsummon/Untransform commands.
+the expansion's AI (new monster behaviour, "approach" jobs, damage transfer), transformation spells, and the
+Unsummon/Untransform commands. While transformed, a character cannot pick up items or talk, as in the original.
 
 Not done yet, or simplified:
 
-- Transformation spells (Transform Into Bear and the like): the spell runs and its stat changes apply, but the
-  character keeps their own appearance.
+- Transformation spells: the character becomes the creature (its model, skins and animations) and changes back when
+  the spell ends or with Untransform. A game saved while transformed stores the character in their own form; after
+  loading, they stay in their own form until the spell's time runs out.
 - Set items: wearing a full set does not yet give the set bonus.
 - Some interface commands of the expansion: arranging the backpack, auto-sell, a few options-screen entries.
 - Multiplayer with the expansion has not been tested.
