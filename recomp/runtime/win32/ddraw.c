@@ -592,7 +592,8 @@ M(dd_RestoreDisplayMode, 1) ME(DDraw, O_DD) me->mode_w = (uint32_t)w32_screen_w;
 M(dd_SetCooperativeLevel, 3) ME(DDraw, O_DD)
     dsr_log("SetCooperativeLevel hwnd %08x flags %08x", ARG(1), ARG(2));
     if (ARG(1)) me->hwnd = ARG(1);
-    me->coop = ARG(2); RET(DD_OK, 3);
+    me->coop = ARG(2);
+    RET(DD_OK, 3);
 END
 void w32_set_window_pos(Ctx *c, uint32_t hwnd, int x, int y, int cx, int cy, uint32_t fl);
 M(dd_SetDisplayMode, 6) ME(DDraw, O_DD)
@@ -650,6 +651,9 @@ static uint32_t device_create(DDraw *dd, DSurface *rt);
 static uint32_t vb_create(uint32_t desc);
 M(d3d_CreateDevice, 4) ME(DDraw, O_D3D)
     DSurface *rt = obj(ARG(2), O_SURF); uint32_t g = device_create(me, rt);
+    /* as Direct3D: unless the application asked to keep its FPU state (DDSCL_FPUPRESERVE), the calling thread's x87 is
+     * left in single precision with exceptions masked (this game asks for that outright with DDSCL_FPUSETUP) */
+    if (!(me->coop & 0x1000u) && !getenv("W32_NO_FPUSETUP")) c->fcw = (c->fcw & ~0xf3fu) | 0x3fu;   /* W32_NO_FPUSETUP: test switch */
     dsr_log("device created (%08x) on surface %u", rt_r32(G_MEM, ARG(1)), rt ? rt->id : 0);
     rt_w32(G_MEM, ARG(3), g); RET(DD_OK, 4);
 END

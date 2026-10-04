@@ -150,6 +150,29 @@ static inline void flags_set(LFs *f, uint32_t v, uint32_t mask)
 #define ST(i)     (c->st[(c->top + (i)) & 7])
 #define FPUSH(v)  do { double _v = (v); c->top = (c->top - 1) & 7; c->st[c->top] = _v; } while (0)
 #define FPOP()    (c->top = (c->top + 1) & 7)
+/* a value rounded to float as the x87 does, honouring the rounding-control field (FCW bits 10-11): nearest, down,
+ * up or toward zero; the game switches to toward-zero at times, and its 32-bit stores then truncate */
+static inline float rt_f32(uint32_t fcw, double x)
+{
+    float f = (float)x;
+    if (__builtin_expect((fcw & 0xc00u) == 0, 1) || (double)f == x || x != x) return f;
+    switch ((fcw >> 10) & 3) {
+    case 1: if ((double)f > x) f = nextafterf(f, -INFINITY); break;
+    case 2: if ((double)f < x) f = nextafterf(f, INFINITY); break;
+    default: if (fabs((double)f) > fabs(x)) f = nextafterf(f, 0.0f); break;
+    }
+    return f;
+}
+/* precision control (FCW bits 8-9): with single precision selected, as Direct3D leaves it for this game
+ * (DDSCL_FPUSETUP), add/sub/mul/div/sqrt results are rounded to 24 bits like the x87's; the exponent keeps the
+ * x87's range (values outside float's normal range are left as they are) */
+static inline double rt_pc(uint32_t fcw, double x)
+{
+    if (__builtin_expect((fcw & 0x300u) != 0, 0)) return x;
+    double a = fabs(x);
+    return (a >= 1.1754943508222875e-38 && a <= 3.4028234663852886e+38) ? (double)rt_f32(fcw, x) : x;
+}
+#define PC(x)     rt_pc(c->fcw, (x))
 enum { FSW_C0 = 0x100, FSW_C1 = 0x200, FSW_C2 = 0x400, FSW_C3 = 0x4000 };
 static inline void rt_fcom(Ctx *c, double a, double b)
 {

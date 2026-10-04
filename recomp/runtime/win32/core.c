@@ -70,6 +70,7 @@ IMPL(kernel32, GetModuleHandleA)
 }
 IMPL(kernel32, LoadLibraryA)
 {
+    if (getenv("W32_LIBLOG")) fprintf(stderr, "w32: LoadLibraryA(%s)\n", GS(ARG(0)));
     { uint32_t b = w32_load_library(c, GS(ARG(0))); if (b) RET(b, 1); }
     int k = dll_index(GS(ARG(0)));
     if (k < 0) { fprintf(stderr, "w32: LoadLibraryA(%s) -> not available\n", GS(ARG(0))); w32_set_last_error(c, 126); RET(0, 1); }
@@ -77,6 +78,7 @@ IMPL(kernel32, LoadLibraryA)
 }
 IMPL(kernel32, LoadLibraryExA)
 {
+    if (getenv("W32_LIBLOG")) fprintf(stderr, "w32: LoadLibraryExA(%s, flags %x)\n", GS(ARG(0)), ARG(2));
     { uint32_t b = w32_load_library(c, GS(ARG(0))); if (b) RET(b, 3); }
     int k = dll_index(GS(ARG(0)));
     if (k < 0) { fprintf(stderr, "w32: LoadLibraryExA(%s) -> not available\n", GS(ARG(0))); w32_set_last_error(c, 126); RET(0, 3); }

@@ -92,14 +92,14 @@ struct dp8_ep {
     Pend *pend, *pend_tail;                 /* received messages, handed up after the lock is released */
 };
 
-/* DP8_TRACE=1: every datagram sent and received (address, size, first bytes) */
+/* DP8_TRACE=1: every datagram sent and received (address, size, first bytes; =2 all bytes) */
 static void trace(const char *dir, const struct sockaddr_in *a, const uint8_t *p, size_t len, int enum_port)
 {
-    static int on = -1; if (on < 0) on = getenv("DP8_TRACE") != 0;
+    static int on = -1; if (on < 0) on = getenv("DP8_TRACE") ? atoi(getenv("DP8_TRACE")) : 0;
     if (!on) return;
     char ip[32]; inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip);
     fprintf(stderr, "dp8: %s %s:%u%s %zu:", dir, ip, ntohs(a->sin_port), enum_port ? " (enum port)" : "", len);
-    for (size_t i = 0; i < len && (i < 40 || (len > 1 && p[0] == 0 && p[1] == 3)); i++) fprintf(stderr, " %02x", p[i]);   /* enumeration answers in full */
+    for (size_t i = 0; i < len && (i < 40 || on >= 2 || (len > 1 && p[0] == 0 && p[1] == 3)); i++) fprintf(stderr, " %02x", p[i]);   /* enumeration answers in full */
     fprintf(stderr, "\n");
 }
 static void raw_send(dp8_ep *ep, const struct sockaddr_in *to, const void *buf, size_t len)
