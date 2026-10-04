@@ -3,6 +3,10 @@
 # install.sh --gog-installer <setup_dungeon_siege_*.exe>      (GOG offline installer; needs: brew install innoextract)
 # install.sh --yesterhaven <folder>    adds Gas Powered Games' Yesterhaven multiplayer map (Yesterhaven.dsmap and
 #                                      Yesterhaven.dsres, found anywhere under <folder>); on its own or with the above
+# install.sh --expansion <folder>      adds Legends of Aranna from your own copy (Expansion.dsres, Expansion.dsmap and
+#                                      ExpVoices.dsres, plus XPRes.dsres/XPMap.dsmap if present, found anywhere under
+#                                      <folder>, e.g. the installed game's DSLOA folder or the disc); only the data is
+#                                      used, never DSLOA.exe. Choose "Legends of Aranna" in the launcher.
 #
 # Builds the natively recompiled Dungeon Siege from your own copy of the GOG 1.11.1 game and installs
 # "Dungeon Siege Native.app" (no Wine, no Rosetta). The game folder is only read: settings, saves and logs go to the
@@ -10,11 +14,11 @@
 # installs capstone and unicorn with pip into recomp/.venv).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GAME=""; GOG_EXE=""; YH=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+GAME=""; GOG_EXE=""; YH=""; LOA=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
 while [ $# -gt 0 ]; do
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
-    --yesterhaven) YH="$2"; shift 2;;
+    --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
   esac
 done
@@ -30,8 +34,24 @@ yesterhaven() {
   cp "$m" "$DATA/game/Maps/Yesterhaven.dsmap"; cp "$r" "$DATA/game/Resources/Yesterhaven.dsres"
   echo "== Yesterhaven installed in $DATA/game: host a multiplayer game and choose it under Map Settings"
 }
-if [ -n "$YH" ]; then
-  yesterhaven
+# Legends of Aranna: its archives go to <data>/expansion, a read-only layer the game sees over its own folder when the
+# expansion is chosen in the launcher (other .dsres files next to them, such as mods, are left out)
+expansion() {
+  local f n src; mkdir -p "$DATA/expansion/Resources" "$DATA/expansion/Maps"
+  for n in Expansion.dsres ExpVoices.dsres Expansion.dsmap XPRes.dsres XPMap.dsmap; do
+    src="$(find "$LOA" -iname "$n" -print -quit 2>/dev/null)"
+    if [ -z "$src" ]; then
+      case "$n" in XP*) continue;; *) echo "$n not found under $LOA"; exit 1;; esac
+    fi
+    [ "$(head -c 8 "$src")" = DSigTank ] || { echo "$src is not a Dungeon Siege archive"; exit 1; }
+    case "$n" in *.dsmap) f="$DATA/expansion/Maps/$n";; *) f="$DATA/expansion/Resources/$n";; esac
+    cp "$src" "$f"
+  done
+  echo "== Legends of Aranna installed in $DATA/expansion: choose it in the launcher's Game row"
+}
+if [ -n "$YH$LOA" ]; then
+  [ -z "$YH" ] || yesterhaven
+  [ -z "$LOA" ] || expansion
   [ -n "$GAME$GOG_EXE" ] || exit 0
 fi
 if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; the app reads the game from there

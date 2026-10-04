@@ -86,9 +86,15 @@ uses the built-in view distance instead (the mod's file is set aside for that se
   `DS_NO_LAUNCHER=1 "$HOME/Applications/Dungeon Siege Native.app/Contents/MacOS/launcher"`.
 - The log is `~/Games/DungeonSiegeNative/DungeonSiegeNative.log`.
 
-## Not supported yet
+## Legends of Aranna
 
-- *Legends of Aranna* (`DSLOA.exe`), the Steam and disc versions.
+Add the expansion from your own copy with `./install.sh --expansion "/path/to/Legends of Aranna"` and choose it in the
+launch window: [LEGENDS-OF-ARANNA.md](LEGENDS-OF-ARANNA.md).
+
+## Not supported
+
+- The Steam and disc versions of Dungeon Siege as the base game (the recompiler needs the GOG 1.11.1 executable).
+- `DSLOA.exe` itself: the expansion's data runs on the GOG engine instead.
 
 ## For developers
 

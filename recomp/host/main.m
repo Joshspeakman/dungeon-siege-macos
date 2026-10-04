@@ -355,7 +355,8 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
 static void ensure_resolution(const char *drive_c)
 {
     char dir[1200], path[1300];
-    snprintf(dir, sizeof dir, "%s/Users/player/Documents/Dungeon Siege", drive_c);
+    const char *exp = getenv("DS_EXPANSION");      /* Legends of Aranna has its own settings and saves (runtime/win32/core.c) */
+    snprintf(dir, sizeof dir, "%s/Users/player/Documents%s/Dungeon Siege", drive_c, exp && *exp ? "/Legends of Aranna" : "");
     snprintf(path, sizeof path, "%s/DungeonSiege.ini", dir);
     int w = w32_screen_w, h = w32_screen_h, force = 0;
     const char *r = getenv("DS_RESOLUTION");
