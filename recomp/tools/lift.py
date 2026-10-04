@@ -57,6 +57,7 @@ OVERRIDES = {
     0x005cde38: 'GoMagic: mana cost of a spell (Go* caster, Go* target, bool)',
     0x005a8af3: 'Rules::GetDamageRange(Goid, Goid, float&, float&, bool)',
     0x005c5515: 'GoAttack::GetAttackRange()',
+    0x005a97b8: 'Rules: damage a Go (victim, attacker, weapon, amount, ...)',
 }
 
 class Unsupported(Exception): pass

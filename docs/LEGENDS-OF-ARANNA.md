@@ -58,8 +58,8 @@ Not done yet, or simplified:
   loading, they stay in their own form until the spell's time runs out.
 - Set items: the bonuses for wearing several pieces of a set apply, and are recounted whenever a piece changes hands.
 - The expansion's new kinds of item bonus: spell cost and spell damage (for the spell groups they name, such as fire or
-  healing spells), and weapon range work, from items, their random prefixes and suffixes, and sets. "Chance to cast
-  a spell when hit" (special defense) is not done yet.
+  healing spells), weapon range, and the chance to cast a spell at an attacker when hit (special defense) work, from
+  items, their random prefixes and suffixes, and sets.
 - Backpacks (an item with its own inventory, opened with a right-click) do not open yet.
 - Shops' Sell All: written to the expansion's description (sells everything not equipped; its list offers Sell All,
   and Sell All but Potions / Spells / Unique Spells / Magic Items; spellbooks, gold, backpacks and unsellable items
