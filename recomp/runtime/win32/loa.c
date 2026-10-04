@@ -188,8 +188,11 @@ static void GoActor_GetGenericStateCasterGoid(Ctx *c)
     uint32_t node = rt_r32(G_MEM, it), r = node == rt_r32(G_MEM, THIS + 0x4c) ? rt_r32(G_MEM, 0x7a1324u) : rt_r32(G_MEM, node + 0x1c);
     scratch_end(c, esp); RET(r, 1);
 }
-/* skills: a vector of 0x48-byte entries at GoActor +0x18/+0x1c: name (string, its text pointer first), natural level
- * +0x34, bonus from modifiers +0x38 */
+/* skills: a vector of 0x48-byte entries at GoActor +0x18/+0x1c: name (string, its text pointer first), experience
+ * +0x2c, bonus from modifiers +0x34 (recomputed with the modifiers), natural level +0x38 */
+#define SKILL_XP      0x2c
+#define SKILL_BONUS   0x34
+#define SKILL_NATURAL 0x38
 static uint32_t skill_entry(uint32_t actor, const char *name)
 {
     for (uint32_t e = rt_r32(G_MEM, actor + 0x18), end = rt_r32(G_MEM, actor + 0x1c); e && e < end; e += 0x48) {
@@ -202,7 +205,7 @@ static void GoActor_RSCopySkills(Ctx *c)             /* (GoActor const& from, fl
     uint32_t from = ARG(0); float k = ARGF(1);
     for (uint32_t e = rt_r32(G_MEM, from + 0x18), end = rt_r32(G_MEM, from + 0x1c); e && e < end; e += 0x48) {
         uint32_t p = rt_r32(G_MEM, e); if (!p) continue;
-        uint32_t d = skill_entry(THIS, GS(p)); if (d) rt_wf32(G_MEM, d + 0x34, rt_rf32(G_MEM, e + 0x34) * k);
+        uint32_t d = skill_entry(THIS, GS(p)); if (d) { rt_wf32(G_MEM, d + SKILL_NATURAL, rt_rf32(G_MEM, e + SKILL_NATURAL) * k); rt_wf32(G_MEM, d + SKILL_XP, rt_rf32(G_MEM, e + SKILL_XP) * k); }
     }
     modifiers_dirty(c, COMP_GO(THIS));
     RET(0, 2);
@@ -676,7 +679,7 @@ static void GoDb_SRemoveEnchantments(Ctx *c)      /* (Goid target, Goid source, 
 static void Rules_RSSetNaturalSkillLevel(Ctx *c)    /* (Goid, const char* skill, float level) */
 {
     uint32_t go = goid_go(c, ARG(0)), actor = GO_ACTOR(go), e = actor ? skill_entry(actor, GS(ARG(1))) : 0;
-    if (e) { rt_wf32(G_MEM, e + 0x34, ARGF(2)); modifiers_dirty(c, go); }
+    if (e) { rt_wf32(G_MEM, e + SKILL_NATURAL, ARGF(2)); modifiers_dirty(c, go); }
     RET(0, 3);
 }
 
@@ -1001,6 +1004,7 @@ static const char *const loa_alter_names[] = {"ALTER_SPECIAL_DEFENSE", "ALTER_SP
 enum { LA_SPECIAL_DEFENSE, LA_SPELL_COST, LA_SPELL_DAMAGE, LA_RANGED_RANGE, LA_RENDER_SCALE, LA_COMBAT_TO_NATURE, LA_COUNT };
 static uint32_t loa_alter_base(void) { static uint32_t b; if (!b) b = rt_r32(G_MEM, 0x7a3bd0u + 8); return b; }   /* the table's end */
 static uint32_t loa_alter_str[LA_COUNT];
+static int skills_reversed;
 /* enchantments applied to an object (by spells): GoDb keeps a map (+0x64) from the target (Go*) to its enchantment
  * storage, a vector (+4/+8) of enchantments: alteration at +0, applied value at +0x68 (multiplied values combine) */
 static float applied_alteration(uint32_t go, uint32_t alteration, int multiply)
@@ -1544,6 +1548,20 @@ static int override_impl(Ctx *c, uint32_t addr)
         rt_w32(G_MEM, slot, keep);
         c->esp += 4 + 4 * (uint32_t)nargs; return 1;
     }
+    case 0x5a4d17: {                                  /* Enchantment: apply its alteration (enchantment in ecx) */
+        /* alter_combat_magic_to_nature_magic (Convert Combat) is the base engine's nature-to-combat transfer the other
+         * way round: applied as that one, with the two skills swapped in the transfer (0x5a6417) */
+        static int inside; uint32_t en = c->ecx;
+        if (inside || rt_r32(G_MEM, en) != loa_alter_base() + LA_COMBAT_TO_NATURE) return 0;
+        static uint32_t to_combat; if (!to_combat && !fubi_enum(c, "eAlteration", "alter_nature_magic_to_combat_magic", &to_combat)) return 0;
+        rt_w32(G_MEM, en, to_combat); inside = 1; skills_reversed = 1;
+        ext_thiscall(c, addr, en, 0, 0);
+        skills_reversed = 0; inside = 0; rt_w32(G_MEM, en, loa_alter_base() + LA_COMBAT_TO_NATURE);
+        c->esp += 4; return 1;
+    }
+    case 0x5a6417:                                    /* Enchantment: move skill points (from, to, amount) */
+        if (skills_reversed) { uint32_t f = ARG(0); rt_w32(G_MEM, c->esp + 4, ARG(1)); rt_w32(G_MEM, c->esp + 8, f); }
+        return 0;
     case 0x6dec5c: return ui_wrap(c, addr, 1);        /* ShowInterface(const gpstring&) */
     case 0x6dee75: return ui_wrap(c, addr, 4);        /* ShowGroup(group, show, ..., interface) */
     case 0x5cfa0d:                                    /* const char* ToString(eJobAbstractType) */
@@ -1577,6 +1595,13 @@ static int override_impl(Ctx *c, uint32_t addr)
 void loa_hook(Ctx *c, uint32_t addr)
 {
     switch (addr) {
+    case 0x5a39a6: {                                  /* the enchantment update picks its pass by the alteration's category
+                                                       * (a byte table indexed by alteration, 0x78978c): the expansion's
+                                                       * values lie past it, so they get theirs here (skill transfer: 1) */
+        uint32_t en = rt_r32(G_MEM, c->esi), alt = en ? rt_r32(G_MEM, en) : 0, b = loa_alter_base();
+        if (b && alt >= b && alt < b + LA_COUNT) c->eax = (c->eax & ~0xffu) | (alt == b + LA_COMBAT_TO_NATURE ? 1u : 0u);
+        break;
+    }
     case 0x4acb46:                                    /* a FuBi enum spec was constructed (this in eax) */
         if (c->eax == 0x7a9fa0u) rt_w32(G_MEM, 0x7a9fa0u + 0x20, JAT_APPROACH + 1);   /* eJobAbstractType: 34 values */
         break;
@@ -1830,6 +1855,24 @@ static void key_untransform(Ctx *c)
     const char *spell = getenv("DS_LOA_SPELLTEST");         /* development: Y casts spell <template> from the first member on itself */
     uint32_t m[16];
     if (getenv("DS_LOA_ENDTEST")) { w32_callback(c, 0x4997d7u, 0, 0); RET(1, 0); }   /* development: Y shows the end-of-game dialog */
+    if (getenv("DS_LOA_CONVERTTEST") && party_members(c, m, 16)) {  /* development: Y casts Convert Combat's enchantments on the hero */
+        uint32_t actor = GO_ACTOR(m[0]), cm = actor ? skill_entry(actor, "combat magic") : 0, nm = actor ? skill_entry(actor, "nature magic") : 0;
+        static int done;
+        if (!done && cm) {
+            done = 1; rt_wf32(G_MEM, cm + SKILL_NATURAL, 20); modifiers_dirty(c, m[0]);
+            uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0);
+            uint32_t esp = c->esp, a[2] = {GO_GOID(m[0]), sstr(c, "spell_convertcombat")};
+            uint32_t req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBUGoid_@@PBD@Z"), 2, a);
+            uint32_t sp = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+            scratch_end(c, esp);
+            uint32_t mg = go_comp(c, goid_go(c, sp), "?GetMagic@Go@@QAEPAVGoMagic@@XZ"), ea[2] = {GO_GOID(m[0]), GO_GOID(m[0])};
+            if (mg) ext_thiscall(c, FX("?SApplyEnchantments@GoMagic@@QAEXPBUGoid_@@0@Z"), mg, 2, ea);
+        }
+        modifiers_dirty(c, m[0]);
+        fprintf(stderr, "loa: applied convert %.2f, combat %.2f\n", applied_alteration(m[0], loa_alter_base() + LA_COMBAT_TO_NATURE, 0), applied_alteration(m[0], 15, 0));
+        if (cm && nm) fprintf(stderr, "loa: combat magic %.1f+%.1f, nature magic %.1f+%.1f\n", rt_rf32(G_MEM, cm + SKILL_NATURAL), rt_rf32(G_MEM, cm + SKILL_BONUS), rt_rf32(G_MEM, nm + SKILL_NATURAL), rt_rf32(G_MEM, nm + SKILL_BONUS));
+        RET(1, 0);
+    }
     if (getenv("DS_LOA_SHRINKTEST") && party_members(c, m, 16)) {  /* development: Y spawns a bear, then shrinks it (Diminution) */
         static uint32_t bear;
         uint32_t ha = GO_ASPECT(m[0]), yes = 1; if (ha) ext_thiscall(c, FX("?SetIsInvincible@GoAspect@@QAEX_N@Z"), ha, 1, &yes);
@@ -1925,7 +1968,7 @@ static void key_untransform(Ctx *c)
         }
         phase++;
         uint32_t actor0 = GO_ACTOR(m[0]);                            /* (strong enough for any requirement) */
-        for (const char *const *sk = (const char *const[]){"Strength", "Dexterity", "Intelligence", 0}; *sk && actor0; sk++) { uint32_t e = skill_entry(actor0, *sk); if (e) rt_wf32(G_MEM, e + 0x34, 60); }
+        for (const char *const *sk = (const char *const[]){"Strength", "Dexterity", "Intelligence", 0}; *sk && actor0; sk++) { uint32_t e = skill_entry(actor0, *sk); if (e) rt_wf32(G_MEM, e + SKILL_NATURAL, 60); }
         modifiers_dirty(c, m[0]);
         if (nmade) {
             for (int i = 0; i < nmade && inv; i++) { uint32_t e[3] = {es_none, made[i], ao}; ext_thiscall(c, FX("?RSAutoEquip@GoInventory@@QAEPAUCookie__@FuBi@@W4eEquipSlot@@PBUGoid_@@W4eActionOrigin@@@Z"), inv, 3, e); }

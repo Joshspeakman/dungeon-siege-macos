@@ -73,7 +73,7 @@ void rt_hook(Ctx *c, uint32_t addr)
     switch (addr) {
     case 0x0059000f: mood_loaded(c); break;
     case 0x0061d06c: skrit_message(c); break;
-    case 0x004acb46: case 0x005d1fcf: case 0x004036a8: { extern int loa_active; void loa_hook(Ctx *, uint32_t); if (loa_active) loa_hook(c, addr); break; }
+    case 0x004acb46: case 0x005d1fcf: case 0x004036a8: case 0x005a39a6: { extern int loa_active; void loa_hook(Ctx *, uint32_t); if (loa_active) loa_hook(c, addr); break; }
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */
         if (getenv("DS_HOOKTRACE")) fprintf(stderr, "hook %08x: eax %08x ecx %08x edx %08x ebx %08x esi %08x edi %08x | ret %08x args %08x %08x %08x %08x\n",
                                             addr, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi, rt_r32(G_MEM, c->esp), rt_r32(G_MEM, c->esp + 4),

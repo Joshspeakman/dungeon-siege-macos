@@ -24,6 +24,7 @@ HOOKS = {
     0x004acb46: 'FuBi enum spec constructed: Legends of Aranna extends eJobAbstractType',
     0x005d1fcf: 'GoMind template jobs loaded: Legends of Aranna adds jat_approach',
     0x004036a8: 'FuBi enum spec constructed (second copy): Legends of Aranna extends eQueryTrait',
+    0x005a39a6: 'enchantment update: category of the alteration (Legends of Aranna values)',
 }
 JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd', 'hlt', 'cli', 'sti', 'int1', 'into',
         'int', 'aaa', 'aas', 'aam', 'aad', 'daa', 'das', 'salc', 'les', 'lds', 'retf', 'ljmp', 'lcall', 'arpl', 'bound',
@@ -63,6 +64,8 @@ OVERRIDES = {
     0x0062e80b: 'sound: play a sample (2D)',
     0x0062eae8: 'sound: play a sample (positional)',
     0x0062ee57: 'sound: play a stream',
+    0x005a4d17: 'Enchantment: apply its alteration',
+    0x005a6417: 'Enchantment: move skill points (from, to, amount)',
 }
 
 class Unsupported(Exception): pass
