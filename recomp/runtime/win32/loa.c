@@ -1012,12 +1012,18 @@ void loa_hook(Ctx *c, uint32_t addr)
 /* ---- the overhead world map (Legends of Aranna): the map's info/overheadmap.gas lists the pieces of the world
  * image revealed as the party explores (256x256 textures at x,y on a 1024x768 map) and the named area markers. Which
  * pieces are revealed and which marker is current are kept in the game's quest database (saved with the game). ---- */
-static uint32_t gpstr(Ctx *c, const char *text)          /* a heap gpstring with the given text (kept) */
+/* a gpstring with the given text for passing to the game (read-only): made once per distinct text and kept, so that
+ * calls made on every interface change or key press do not allocate */
+static uint32_t gpstr(Ctx *c, const char *text)
 {
+    static struct { char *text; uint32_t g; } cache[2048]; static int n;
+    for (int i = 0; i < n; i++) if (!strcmp(cache[i].text, text)) return cache[i].g;
     uint32_t g = heap_alloc(w32_process_heap, 8, 16); ext_thiscall(c, GPSTR_CTOR, g, 0, 0);
     static uint32_t fmt; if (!fmt) fmt = gstr("%s");
-    uint32_t t = gstr(text), a[3] = {g, fmt, t};
+    uint32_t esp = c->esp, a[3] = {g, fmt, sstr(c, text)};
     w32_callback(c, FX("?AssignF@String@@CAAAV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@AAV2@PBDZZ"), 3, a);
+    scratch_end(c, esp);
+    if (n < 2048) { cache[n].text = strdup(text); cache[n].g = g; n++; }
     return g;
 }
 static GasBlock *omap; static char omap_for[128];
@@ -1065,8 +1071,9 @@ static void quest_set(Ctx *c, const char *key, int value, int is_bool)
 {
     uint32_t godb = w32_callback(c, FX("?FUBI_GetClassSingleton@GoDb@@CAPAV1@XZ"), 0, 0), any = w32_callback(c, FX("?GetAnyGoid@Goid_@@CAPBU1@XZ"), 0, 0);
     static uint32_t cat; if (!cat) cat = gstr("dsx_overheadmap");
-    uint32_t a[4] = {any, cat, gstr(key), (uint32_t)value};
+    uint32_t esp = c->esp, a[4] = {any, cat, sstr(c, key), (uint32_t)value};          /* (the quest database copies the key) */
     ext_thiscall(c, is_bool ? FX("?SSetQuestBool@GoDb@@QAEXPBUGoid_@@PBD1_N@Z") : FX("?SSetQuestInt@GoDb@@QAEXPBUGoid_@@PBD1H@Z"), godb, 4, a);
+    scratch_end(c, esp);
 }
 static int quest_get(Ctx *c, const char *key, int is_bool)    /* written for every player (AnyGoid), read for the screen hero */
 {
