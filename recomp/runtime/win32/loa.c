@@ -257,7 +257,30 @@ static void GoPlacement_OrientToPosition(Ctx *c)     /* turn (about the vertical
 static void GoBody_SetMaxMoveVelocity(Ctx *c) { rt_wf32(G_MEM, THIS + 0x2c, ARGF(0)); RET(0, 1); }
 static void GoBody_GetTerrainMovementPermissions(Ctx *c) { RET(rt_r32(G_MEM, THIS + 0x30), 0); }   /* terrain_movement_permissions */
 static void GoPhysics_GetSimDuration(Ctx *c) { RETF(ext_thiscall_f(c, 0x5ffeccu, THIS, 0, 0), 0); }   /* the template's sim_duration */
-static void WorldFx_GetPosition(Ctx *c) { RET(0, 2); }      /* (SFx script, SiegePos& out): not tracked, out unchanged */
+/* WorldFx::GetPosition(script id, SiegePos& out): where an effect script is. The expansion's orb spells ask where their
+ * orbiting effect is, to shoot from it. The running scripts are a map (id -> script) in the effect manager; a script
+ * knows the Go that owns it (+0xc: the spell), and the caster holds the spell's generic state. The position returned is
+ * the caster's, at chest height (the orb circles the caster). */
+static int map_nodes(uint32_t map, uint32_t *node, int max);
+static int generic_states(uint32_t actor, uint32_t *node, int max);
+static int party_members(Ctx *c, uint32_t *out, int max);
+static void WorldFx_GetPosition(Ctx *c)
+{
+    uint32_t fx = rt_r32(G_MEM, THIS + 4), mgr = fx ? rt_r32(G_MEM, fx + 0x8c) : 0, id = ARG(0), out = ARG(1), owner = 0;
+    static uint32_t node[4096]; int n = mgr ? map_nodes(mgr + 0x10, node, 4096) : 0;
+    for (int i = 0; i < n && !owner; i++) if (rt_r32(G_MEM, node[i] + 0xc) == id) { uint32_t sc = rt_r32(G_MEM, node[i] + 0x10); owner = sc ? rt_r32(G_MEM, sc + 0xc) : 0; }
+    uint32_t m[16], st[64]; int np = owner ? party_members(c, m, 16) : 0;
+    for (int i = 0; i < np; i++) {
+        uint32_t actor = GO_ACTOR(m[i]); int k = actor ? generic_states(actor, st, 64) : 0;
+        for (int j = 0; j < k; j++) if (rt_r32(G_MEM, st[j] + 0x20) == owner) {
+            uint32_t pl = go_comp(c, m[i], "?GetPlacement@Go@@QAEPAVGoPlacement@@XZ"); if (!pl) break;
+            uint32_t pos = ext_thiscall(c, FX("?GetPosition@GoPlacement@@QBEABUSiegePos@@XZ"), pl, 0, 0);
+            memcpy(GP(out), GP(pos), 16); rt_wf32(G_MEM, out + 4, rt_rf32(G_MEM, out + 4) + 1.2f);   /* SiegePos {x, y, z, node}: chest height */
+            RET(1, 2);
+        }
+    }
+    RET(0, 2);
+}
 
 /* ---- GoAspect ---- */
 static void GoAspect_SetRenderScaleMultiplier(Ctx *c) { rt_wf32(G_MEM, THIS + 0x1c, ARGF(0)); RET(0, 1); }   /* scale_multiplier */
