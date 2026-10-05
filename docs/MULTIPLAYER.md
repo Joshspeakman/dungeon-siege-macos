@@ -46,8 +46,10 @@ either, or for a Windows host without DirectPlay's own UPnP support:
 Mac and PC players can be in the same game, in either direction (tested against the original game on Linux through
 Proton, with Microsoft's DirectPlay). The game itself checks that everyone runs exactly the same thing, so:
 
-- **The same game build.** Every player needs the GOG release, version 1.11.1. The Steam release is a slightly
-  different build: Steam and GOG copies refuse each other even when both run on Windows.
+- **The same game build.** PC players need the GOG release, version 1.11.1. The Steam release is a slightly
+  different build, and Steam and GOG copies refuse each other on Windows. A Mac app built from either copy presents
+  itself as GOG 1.11.1, so Mac players can use either.
+  (Tested: a Mac built from the Steam copy hosted, and a PC with the GOG game joined and played.)
 - **The executable named `DungeonSiege.exe`.** Its file name is part of the fingerprint the game compares; a renamed
   copy (e.g. `DungeonSiege_GOG.exe`) is refused.
 - **The same resource files.** Every player needs the same set of `.dsres` archives in `Resources` (and maps in
@@ -109,6 +111,16 @@ a session over loopback with simulated packet loss. `recomp/tests/dp8fuzz.c` is 
 
 - Hosting, finding and joining games (LAN and by address), the staging area, and playing together on Utraean
   Peninsula and Yesterhaven work between copies of the app.
-- Playing with Windows players follows Microsoft's protocol specifications but has not been tested against Windows yet.
+- **Cross-play is tested.** The PC side ran the Windows game on Linux through Proton, with Microsoft's own
+  DirectPlay. Combinations tried:
+  - a Mac hosting with a PC joining;
+  - a PC hosting with a Mac joining;
+  - a Steam-built Mac hosting a GOG PC;
+  - an internet join through a router, with ports forwarded automatically.
+
+  A native Windows PC hasn't been tried yet, but it uses the same Microsoft DirectPlay.
+- Joining players' own heroes respond faster to clicks: about 0.2 s instead of 0.5 s on a LAN in tests.
+- Known limit: two copies of the app on the *same* Mac can join each other, but the joiner's world may not
+  load. Use two machines.
 - Known quirk: when a player joins, the host's chat shows "… has entered the game" followed by "… has left the game",
   although the player stays in the game.

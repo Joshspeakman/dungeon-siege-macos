@@ -22,7 +22,7 @@ recomp/build.sh "/path/to/Dungeon Siege/DungeonSiege.exe"     # -> recomp/work/f
 | Bink video | the game's own BinkW32.dll, recompiled like Miles (movies are inside Objects.dsres; the expansion's in Expansion.dsres); its sound goes through Miles; frames copied to the primary surface are presented |
 | Structured exception handling incl. `__except` blocks (landing pads in the 39 functions that use them) | working |
 | App bundle + installer (`../install.sh`), launch window (`host/launcher.m`) | working |
-| DirectPlay 8 client/server and TCP/IP provider (`runtime/win32/dpnet.c`, `dp8proto.c`), from Microsoft's protocol specifications; WSOCK32 host name and addresses | working between copies of the app; not yet tested against Windows (`../docs/MULTIPLAYER.md`) |
+| DirectPlay 8 client/server and TCP/IP provider (`runtime/win32/dpnet.c`, `dp8proto.c`), from Microsoft's protocol specifications; WSOCK32 host name and addresses | working between copies of the app and with PCs running the Windows game and Microsoft's DirectPlay, in both directions (tested under Proton; `../docs/MULTIPLAYER.md`) |
 
 The recompiled game runs on Apple Silicon without Wine or Rosetta: intro, menus, new games, loading and saving, the
 campaign, with no optimisation of the recompiled code yet.
