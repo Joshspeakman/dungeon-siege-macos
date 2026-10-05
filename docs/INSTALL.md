@@ -49,6 +49,20 @@ What goes where:
 
 To update: `git pull`, then run the same `install.sh` command again (saves are kept).
 
+### Backing up and setting up again
+
+Keep one backup folder with everything, and a new or reinstalled Mac is set up with one command:
+
+```sh
+./install.sh --save-collection "/Volumes/Backup/Dungeon Siege collection"    # write the backup
+./install.sh --collection "/Volumes/Backup/Dungeon Siege collection"         # set up from it
+```
+
+The collection holds the GOG game folder, Legends of Aranna's archives, Yesterhaven and other mods, your saves and the
+launcher's settings (a GOG offline installer can be put in it instead of the game folder). Setting up copies the game
+into the data folder, restores saves and settings when the Mac has none yet, adds the expansion and mods, and builds
+the app; the backup can be unplugged afterwards. Keep the collection private: it holds your own copies of the games.
+
 To uninstall: delete `~/Applications/Dungeon Siege Native.app`, and `~/Games/DungeonSiegeNative` if you no longer want
 your saves.
 
