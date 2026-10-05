@@ -54,6 +54,10 @@ and 6, about 85% with step 5. A flat 120 on an M1 Pro: about 50%, limited mostly
   Every change was checked: random-operation tests against the hardware, the instruction fuzzer, the differential
   check, and the multiplayer digest (still equal to the PC's). Next candidates: the rest of character skinning
   (`0x693f6f`, `0x695c99`, slerp `0x694970`), or keeping the x87 stack in registers in the lifter.
+- **Dynamic resolution (step 5): not needed.** At this M1 Pro's native 1728x1117 the GPU takes 4.3 ms per frame
+  (forest, 150% or 300% view distance; single-frame peaks 7-13 ms). A base M1 has ~2.3x less GPU and a smaller
+  screen (1440x900), so about 7 ms against a 60 Hz display's 16.7 ms; the 120 Hz (ProMotion) Macs have Pro/Max/Ultra
+  GPUs. Revisit only if a scene measures over budget.
 - **Defaults:** view distance starts at Very Far (200%) on Max and Ultra chips, Farther (150%) elsewhere; the frame
   rate already follows the display.
 
