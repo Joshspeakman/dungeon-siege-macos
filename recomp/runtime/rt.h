@@ -156,12 +156,13 @@ static inline float rt_f32(uint32_t fcw, double x)
 {
     float f = (float)x;
     if (__builtin_expect((fcw & 0xc00u) == 0, 1) || (double)f == x || x != x) return f;
+    uint32_t b; memcpy(&b, &f, 4);                       /* one step to the neighbouring float (what nextafterf does) */
     switch ((fcw >> 10) & 3) {
-    case 1: if ((double)f > x) f = nextafterf(f, -INFINITY); break;
-    case 2: if ((double)f < x) f = nextafterf(f, INFINITY); break;
-    default: if (fabs((double)f) > fabs(x)) f = nextafterf(f, 0.0f); break;
+    case 1: if ((double)f > x) b = (b & 0x7fffffffu) == 0 ? 0x80000001u : (b >> 31) ? b + 1 : b - 1; break;   /* down */
+    case 2: if ((double)f < x) b = (b & 0x7fffffffu) == 0 ? 0x00000001u : (b >> 31) ? b - 1 : b + 1; break;   /* up */
+    default: if (fabs((double)f) > fabs(x)) b -= 1; break;                                                  /* toward zero */
     }
-    return f;
+    memcpy(&f, &b, 4); return f;
 }
 /* precision control (FCW bits 8-9): with single precision selected, as Direct3D leaves it for this game
  * (DDSCL_FPUSETUP), add/sub/mul/div/sqrt results are rounded to 24 bits like the x87's; the exponent keeps the
@@ -173,6 +174,49 @@ static inline double rt_pc(uint32_t fcw, double x)
     return (a >= 1.1754943508222875e-38 && a <= 3.4028234663852886e+38) ? (double)rt_f32(fcw, x) : x;
 }
 #define PC(x)     rt_pc(c->fcw, (x))
+/* The x87 rounds the exact result once; here a double operation rounds to nearest first and PC then rounds that to
+ * float, which in the directed modes (down, up, toward zero) is wrong when the double lands exactly on a float but the
+ * exact result lies just to one side (e.g. -1 + 1e-30 toward zero is -0.99999994 on the x87, not -1). These take the
+ * exact error of the double operation (TwoSum, or a fused multiply-add residual) and step one float in the rounding
+ * direction in that case; round-to-nearest takes the usual path. */
+static inline double rt_pc_err(uint32_t fcw, double s, double err)
+{
+    double r = rt_pc(fcw, s), a = fabs(s);
+    if (err == 0 || r != s || !(a >= 1.1754943508222875e-38 && a <= 3.4028234663852886e+38)) return r;
+    float f = (float)s; uint32_t b; memcpy(&b, &f, 4);
+    switch ((fcw >> 10) & 3) {
+    case 1: if (err < 0) b = (b >> 31) ? b + 1 : b - 1; break;        /* down */
+    case 2: if (err > 0) b = (b >> 31) ? b - 1 : b + 1; break;        /* up */
+    case 3: if ((err < 0) != (s < 0)) b -= 1; break;                  /* toward zero */
+    default: break;
+    }
+    memcpy(&f, &b, 4); return f;
+}
+#define RT_DIRECTED(fcw) __builtin_expect(((fcw) & 0xf00u) != 0 && ((fcw) & 0x300u) == 0, 0)   /* single, not nearest */
+static inline double rt_pc_add(uint32_t fcw, double x, double y)
+{
+    double s = x + y; if (!RT_DIRECTED(fcw)) return rt_pc(fcw, s);
+    double bb = s - x, e = (x - (s - bb)) + (y - bb); return rt_pc_err(fcw, s, e);
+}
+static inline double rt_pc_mul(uint32_t fcw, double x, double y)
+{
+    double p = x * y; if (!RT_DIRECTED(fcw)) return rt_pc(fcw, p);
+    return rt_pc_err(fcw, p, fma(x, y, -p));
+}
+static inline double rt_pc_div(uint32_t fcw, double x, double y)
+{
+    double q = x / y; if (!RT_DIRECTED(fcw) || !(q == q) || y == 0) return rt_pc(fcw, q);
+    double r = fma(-q, y, x); return rt_pc_err(fcw, q, r == 0 ? 0 : (r < 0) == (y < 0) ? 1 : -1);   /* sign of (exact - q) */
+}
+static inline double rt_pc_sqrt(uint32_t fcw, double x)
+{
+    double q = sqrt(x); if (!RT_DIRECTED(fcw) || !(q > 0)) return rt_pc(fcw, q);
+    return rt_pc_err(fcw, q, fma(-q, q, x));
+}
+#define PCADD(x, y) rt_pc_add(c->fcw, (x), (y))
+#define PCSUB(x, y) rt_pc_add(c->fcw, (x), -(y))
+#define PCMUL(x, y) rt_pc_mul(c->fcw, (x), (y))
+#define PCDIV(x, y) rt_pc_div(c->fcw, (x), (y))
 enum { FSW_C0 = 0x100, FSW_C1 = 0x200, FSW_C2 = 0x400, FSW_C3 = 0x4000 };
 static inline void rt_fcom(Ctx *c, double a, double b)
 {

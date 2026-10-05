@@ -34,6 +34,7 @@ JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd',
 # Functions a native implementation can take over (runtime/win32/hooks.c rt_override): at the function's first
 # instruction the runtime may perform the whole call (including the return) itself.
 OVERRIDES = {
+    0x005338e9: 'Quat::RotateVector (native, runtime/win32/native.c)',
     0x005d2679: 'GoMind::RSDoJob (mpfeel: a joiner\'s orders)',
     0x005fbb3c: 'GoFollower::Update (mpfeel: playback on joiners)',
     0x005faf98: 'GoFollower: one plan update unpacked (mpfeel)',
@@ -593,8 +594,8 @@ class Lifter:
         if i.prefix[2] or i.prefix[3]: raise Unsupported('x87 prefix')
         mops = [o for o in i.operands if o.type == X.X86_OP_MEM]
         a = self.addr(i, mops[0])
-        arith = ['ST(0) = PC(ST(0) + v);', 'ST(0) = PC(ST(0) * v);', 'rt_fcom(c, ST(0), v);', 'rt_fcom(c, ST(0), v); FPOP();',
-                 'ST(0) = PC(ST(0) - v);', 'ST(0) = PC(v - ST(0));', 'ST(0) = PC(ST(0) / v);', 'ST(0) = PC(v / ST(0));']
+        arith = ['ST(0) = PCADD(ST(0), v);', 'ST(0) = PCMUL(ST(0), v);', 'rt_fcom(c, ST(0), v);', 'rt_fcom(c, ST(0), v); FPOP();',
+                 'ST(0) = PCSUB(ST(0), v);', 'ST(0) = PCSUB(v, ST(0));', 'ST(0) = PCDIV(ST(0), v);', 'ST(0) = PCDIV(v, ST(0));']
         if op in (0xd8, 0xdc, 0xda, 0xde):
             v = {0xd8: '(double)RF32(ea)', 0xdc: 'RF64(ea)', 0xda: '(double)(int32_t)R32(ea)', 0xde: '(double)(int16_t)R16(ea)'}[op]
             return '{ uint32_t ea = %s; double v = %s; %s }' % (a, v, arith[sub])
@@ -612,13 +613,13 @@ class Lifter:
         return '{ uint32_t ea = %s; %s }' % (a, tbl[(op, sub)])
     def x87reg(self, op, modrm, sub, r):
         if op == 0xd8:
-            return ['ST(0) = PC(ST(0) + ST(%d));', 'ST(0) = PC(ST(0) * ST(%d));', 'rt_fcom(c, ST(0), ST(%d));', 'rt_fcom(c, ST(0), ST(%d)); FPOP();',
-                    'ST(0) = PC(ST(0) - ST(%d));', 'ST(0) = PC(ST(%d) - ST(0));', 'ST(0) = PC(ST(0) / ST(%d));', 'ST(0) = PC(ST(%d) / ST(0));'][sub] % r
+            return ['ST(0) = PCADD(ST(0), ST(%d));', 'ST(0) = PCMUL(ST(0), ST(%d));', 'rt_fcom(c, ST(0), ST(%d));', 'rt_fcom(c, ST(0), ST(%d)); FPOP();',
+                    'ST(0) = PCSUB(ST(0), ST(%d));', 'ST(0) = PCSUB(ST(%d), ST(0));', 'ST(0) = PCDIV(ST(0), ST(%d));', 'ST(0) = PCDIV(ST(%d), ST(0));'][sub] % r
         if op in (0xdc, 0xde):
             pop = ' FPOP();' if op == 0xde else ''
             if op == 0xde and modrm == 0xd9: return 'rt_fcom(c, ST(0), ST(1)); FPOP(); FPOP();'
-            e = ['ST(%d) = PC(ST(%d) + ST(0));', 'ST(%d) = PC(ST(%d) * ST(0));', None, None,
-                 'ST(%d) = PC(ST(0) - ST(%d));', 'ST(%d) = PC(ST(%d) - ST(0));', 'ST(%d) = PC(ST(0) / ST(%d));', 'ST(%d) = PC(ST(%d) / ST(0));'][sub]
+            e = ['ST(%d) = PCADD(ST(%d), ST(0));', 'ST(%d) = PCMUL(ST(%d), ST(0));', None, None,
+                 'ST(%d) = PCSUB(ST(0), ST(%d));', 'ST(%d) = PCSUB(ST(%d), ST(0));', 'ST(%d) = PCDIV(ST(0), ST(%d));', 'ST(%d) = PCDIV(ST(%d), ST(0));'][sub]
             if e is None:
                 return 'rt_fcom(c, ST(0), ST(%d));%s' % (r, ' FPOP();' if sub == 3 or op == 0xde else '')
             return (e % (r, r)) + pop
@@ -631,7 +632,7 @@ class Lifter:
                    0xee: 'FPUSH(0.0);', 0xf0: 'ST(0) = expm1(ST(0) * 0.693147180559945309417);', 0xf1: 'ST(1) = ST(1) * log2(ST(0)); FPOP();',
                    0xf2: 'ST(0) = tan(ST(0)); FPUSH(1.0); c->fsw &= ~(uint32_t)FSW_C2;', 0xf3: 'ST(1) = atan2(ST(1), ST(0)); FPOP();',
                    0xf5: 'rt_fprem(c, 1);', 0xf6: 'c->top = (c->top - 1) & 7;', 0xf7: 'c->top = (c->top + 1) & 7;', 0xf8: 'rt_fprem(c, 0);',
-                   0xf9: 'ST(1) = ST(1) * log2(ST(0) + 1.0); FPOP();', 0xfa: 'ST(0) = PC(sqrt(ST(0)));',
+                   0xf9: 'ST(1) = ST(1) * log2(ST(0) + 1.0); FPOP();', 0xfa: 'ST(0) = rt_pc_sqrt(c->fcw, ST(0));',
                    0xfb: '{ double t = ST(0); ST(0) = sin(t); FPUSH(cos(t)); c->fsw &= ~(uint32_t)FSW_C2; }',
                    0xfc: 'ST(0) = rt_frnd(c, ST(0));', 0xfd: 'ST(0) = ldexp(ST(0), (int)trunc(ST(1)));',
                    0xfe: 'ST(0) = sin(ST(0)); c->fsw &= ~(uint32_t)FSW_C2;', 0xff: 'ST(0) = cos(ST(0)); c->fsw &= ~(uint32_t)FSW_C2;'}
