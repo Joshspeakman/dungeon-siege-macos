@@ -173,6 +173,11 @@ int w32_load(const char *exe_path)
     vm_register(w32_image_base, (w32_image_size + 0xffff) & ~0xffffu, 0x1000000 /* MEM_IMAGE */);
     vm_register(PEB_ADDR, 0x10000, 0x20000); vm_register(TEB_BASE, MAX_THREADS * 0x2000, 0x20000);
     memcpy(G_MEM + w32_image_base, d, hdrsz);
+    {   /* Steam's 1.11.1 executable (no PE checksum) advertises GOG's checksum in multiplayer, as part of playing with GOG
+         * copies (see edition_identity in native.c); DS_STEAM_IDENTITY=steam keeps its own */
+        const char *keep = getenv("DS_STEAM_IDENTITY"); uint32_t ck = w32_image_base + pe + 24 + 64;
+        if (*(uint32_t *)(d + pe + 8) == 0x4d2e4a5au && rt_r32(G_MEM, ck) == 0 && !(keep && !strcmp(keep, "steam"))) rt_w32(G_MEM, ck, 0x003b4d58u);
+    }
     for (int k = 0; k < nsec; k++) {
         uint8_t *s = d + opt + optsz + 40 * k;
         uint32_t va = *(uint32_t *)(s + 12), vs = *(uint32_t *)(s + 8), rs = *(uint32_t *)(s + 16), ra = *(uint32_t *)(s + 20);

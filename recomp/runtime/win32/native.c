@@ -50,6 +50,28 @@ static void quat_slerp(uint32_t a, uint32_t b, float t)
     rt_w32(G_MEM, a + 12, fb(w1 * rf(b + 12) + w0 * rf(a + 12)));
 }
 
+/* 0x435d1d: FuBi's identity of a module file: its PE checksum and a crc of the file after that field; the multiplayer
+ * sync digest adds the crc. Steam's DungeonSiege.exe is the same 1.11.1 build as GOG's but without GOG's small fixes,
+ * so the two digests differ and Steam and GOG copies refuse each other's games. A Mac build made from Steam's file
+ * reports GOG's two values for it, and so plays with GOG players (and PCs running the GOG executable); the header
+ * checksum the game also advertises is set in the build's copy (tools/patch_exe.py). DS_STEAM_IDENTITY=steam keeps
+ * Steam's own values (to play with unmodified Steam copies). DS_IDLOG=1 prints the values. */
+int edition_identity(Ctx *c, uint32_t addr)
+{
+    static int inside; if (inside) return 0;
+    uint32_t pck = ARG(0), pcrc = ARG(1), path = ARG(2), a[3] = {pck, pcrc, path};   /* path: the module handle */
+    uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+    inside = 1; uint32_t ok = w32_callback(c, addr, 3, a) & 0xff; inside = 0;
+    c->ebx = ebx; c->esi = esi; c->edi = edi; c->ebp = ebp; c->eax = ok;
+    if (getenv("DS_IDLOG")) fprintf(stderr, "identity: module %08x ok %u checksum %08x crc %08x\n", path, ok, rt_r32(G_MEM, pck), rt_r32(G_MEM, pcrc));
+    const char *keep = getenv("DS_STEAM_IDENTITY");
+    if (ok && rt_r32(G_MEM, pck) == 0 && rt_r32(G_MEM, pcrc) == 0xfbc6a1f8u && !(keep && !strcmp(keep, "steam"))) {   /* Steam 1.11.1 */
+        rt_w32(G_MEM, pck, 0x003b4d58u); rt_w32(G_MEM, pcrc, 0xd76d5528u);                                       /* GOG 1.11.1 */
+        if (getenv("DS_IDLOG")) fprintf(stderr, "identity: Steam's executable presented as GOG's\n");
+    }
+    c->esp += 4; return 1;
+}
+
 int native_override(Ctx *c, uint32_t addr)
 {
     if (!native_on() || (c->fcw & 0x300u)) return 0;      /* only with single precision */
