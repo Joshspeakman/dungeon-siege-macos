@@ -1,6 +1,11 @@
 #!/bin/bash
 # install.sh --game-dir <GOG "Dungeon Siege" folder> [--app-dir DIR] [--data-dir DIR]
 # install.sh --gog-installer <setup_dungeon_siege_*.exe>      (GOG offline installer; needs: brew install innoextract)
+# install.sh --steam [folder]          the Steam edition (app 39190), downloaded on the Mac through Steam's console
+#                                      (steam://open/console, then: download_depot 39190 39191); without a folder,
+#                                      Steam's download location is used. It is copied into the data folder. A build
+#                                      from it plays with GOG copies (it presents the GOG 1.11.1 identity in
+#                                      multiplayer; DS_STEAM_IDENTITY=steam keeps Steam's own).
 # install.sh --yesterhaven <folder>    adds Gas Powered Games' Yesterhaven multiplayer map (Yesterhaven.dsmap and
 #                                      Yesterhaven.dsres, found anywhere under <folder>); on its own or with the above
 # install.sh --expansion <folder>      adds Legends of Aranna from your own copy (Expansion.dsres, Expansion.dsmap and
@@ -29,10 +34,13 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
-NIGHTLY=""; AS_NIGHTLY=""; ARGS=()
+NIGHTLY=""; AS_NIGHTLY=""; STEAM=""; ARGS=()
+STEAM_SHA=c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab
+STEAM_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_39190/depot_39191"
 while [ $# -gt 0 ]; do
   case "$1" in --nightly) NIGHTLY=1; shift; continue;; --as-nightly) AS_NIGHTLY=1; shift; continue;; esac
-  ARGS+=("$1"); [ $# -gt 1 ] && case "$1" in --*) ARGS+=("$2");; esac
+  ARGS+=("$1"); [ $# -gt 1 ] && case "$1" in --*) case "$2" in --*) ;; *) ARGS+=("$2");; esac;; esac
+  if [ "$1" = --steam ]; then if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then STEAM="$2"; shift 2; else STEAM="$STEAM_DEPOT"; shift; fi; continue; fi
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
     --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;;
@@ -60,7 +68,7 @@ if [ -n "$NIGHTLY" ] && [ -z "$AS_NIGHTLY" ]; then
   else mkdir -p "$HERE/build"; git -C "$HERE" worktree add -q -f --detach "$W" origin/nightly; fi
   echo "== nightly: $(git -C "$W" log -1 --format='%h %s')"
   [ -e "$W/recomp/.venv" ] || [ ! -d "$HERE/recomp/.venv" ] || ln -s "$HERE/recomp/.venv" "$W/recomp/.venv"   # share the tools
-  if [ -z "$GAME$GOG_EXE$COL" ]; then G="$(installed_game)"; [ -n "$G" ] && ARGS+=(--game-dir "$G"); fi
+  if [ -z "$GAME$GOG_EXE$COL$STEAM" ]; then G="$(installed_game)"; [ -n "$G" ] && ARGS+=(--game-dir "$G"); fi
   exec "$W/install.sh" --as-nightly ${ARGS[@]+"${ARGS[@]}"}
 fi
 # Yesterhaven: the map and its resources go to the Mods list (<data>/mods; ticked by default, for both games); the
@@ -132,15 +140,15 @@ fi
 if [ -n "$COL" ]; then
   [ -d "$COL" ] || { echo "no such folder: $COL"; exit 1; }
   inst="$(find "$COL" -maxdepth 3 -iname 'setup_dungeon_siege*.exe' -print -quit 2>/dev/null)"
-  exe=""; while IFS= read -r -d '' f; do [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$GOG_SHA" ] && { exe="$f"; break; }; done \
+  exe=""; while IFS= read -r -d '' f; do case "$(shasum -a 256 "$f" | cut -d' ' -f1)" in "$GOG_SHA"|"$STEAM_SHA") exe="$f"; break;; esac; done \
     < <(find "$COL" -maxdepth 4 -iname 'DungeonSiege.exe*' -type f -print0 2>/dev/null)
   if [ -n "$exe" ]; then         # a game folder: copied into the data folder, so the app does not depend on the backup
     mkdir -p "$DATA"; echo "== copying the game from $(dirname "$exe") into $DATA/gog-game"
     rsync -a --exclude 'DungeonSiege.exe.*' "$(dirname "$exe")/" "$DATA/gog-game/"
-    [ -f "$DATA/gog-game/DungeonSiege.exe" ] && [ "$(shasum -a 256 "$DATA/gog-game/DungeonSiege.exe" | cut -d' ' -f1)" = "$GOG_SHA" ] || cp "$exe" "$DATA/gog-game/DungeonSiege.exe"
+    case "$(shasum -a 256 "$DATA/gog-game/DungeonSiege.exe" 2>/dev/null | cut -d' ' -f1)" in "$GOG_SHA"|"$STEAM_SHA") ;; *) cp "$exe" "$DATA/gog-game/DungeonSiege.exe";; esac
     GAME="$DATA/gog-game"
   elif [ -n "$inst" ]; then GOG_EXE="$inst"
-  else echo "no GOG Dungeon Siege 1.11.1 (offline installer or game folder) found in $COL"; exit 1; fi
+  else echo "no Dungeon Siege 1.11.1 (GOG offline installer, GOG or Steam game folder) found in $COL"; exit 1; fi
   [ -n "$(find "$COL" -maxdepth 4 -iname Expansion.dsres -print -quit 2>/dev/null)" ] && LOA="$COL"   # its archives are found by name
   MODS="$COL"
   for d in "Dungeon Siege" "Dungeon Siege LOA"; do      # saves and settings, unless this Mac already has its own
@@ -153,7 +161,13 @@ if [ -n "$YH$LOA$MODS" ]; then
   [ -z "$LOA" ] || expansion
   [ -z "$MODS" ] || mods "$MODS"
   bundled_mods
-  [ -n "$GAME$GOG_EXE" ] || exit 0
+  [ -n "$GAME$GOG_EXE$STEAM" ] || exit 0
+fi
+if [ -n "$STEAM" ]; then          # the Steam download, copied into the data folder (Steam may clean up its download area)
+  [ -f "$STEAM/DungeonSiege.exe" ] || { echo "no DungeonSiege.exe in $STEAM; download it in Steam's console: download_depot 39190 39191"; exit 1; }
+  [ "$(shasum -a 256 "$STEAM/DungeonSiege.exe" | cut -d' ' -f1)" = "$STEAM_SHA" ] || { echo "$STEAM/DungeonSiege.exe is not Steam's Dungeon Siege 1.11.1"; exit 1; }
+  mkdir -p "$DATA"; echo "== copying the Steam edition from $STEAM into $DATA/steam-game"
+  rsync -a "$STEAM/" "$DATA/steam-game/"; GAME="$DATA/steam-game"
 fi
 if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; the app reads the game from there
   [ -f "$GOG_EXE" ] || { echo "no such file: $GOG_EXE"; exit 1; }
@@ -164,12 +178,12 @@ if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; th
   [ -f "$GAME/DungeonSiege.exe" ] || { echo "DungeonSiege.exe not found in the installer"; exit 1; }
 fi
 [ -n "$GAME" ] || GAME="$(installed_game)"
-[ -n "$GAME" ] || { echo "usage: install.sh --game-dir <Dungeon Siege folder> | --gog-installer <setup_dungeon_siege_*.exe>"; exit 1; }
+[ -n "$GAME" ] || { echo "usage: install.sh --game-dir <Dungeon Siege folder> | --gog-installer <setup_dungeon_siege_*.exe> | --steam [folder]"; exit 1; }
 for tool in clang python3; do command -v $tool >/dev/null || { echo "$tool is missing: install the Xcode command line tools (xcode-select --install)"; exit 1; }; done
 [ "$(uname -m)" = arm64 ] || { echo "the native build is for Apple Silicon Macs"; exit 1; }
 EXE="$GAME/DungeonSiege.exe"; [ -f "$GAME/DungeonSiege.exe.orig" ] && EXE="$GAME/DungeonSiege.exe.orig"
 for cand in "$GAME/DungeonSiege.exe.orig-fpscap" "$GAME/DungeonSiege.exe.orig" "$GAME/DungeonSiege.exe"; do
-  [ -f "$cand" ] && [ "$(shasum -a 256 "$cand" | cut -d' ' -f1)" = 41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02 ] && { EXE="$cand"; break; }
+  [ -f "$cand" ] && case "$(shasum -a 256 "$cand" | cut -d' ' -f1)" in "$GOG_SHA"|"$STEAM_SHA") EXE="$cand"; break;; esac
 done
 echo "== recompiling $EXE (a few minutes)"
 "$HERE/recomp/build.sh" "$EXE"

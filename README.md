@@ -13,6 +13,8 @@ git clone https://github.com/Joshspeakman/dungeon-siege-macos.git && cd dungeon-
 open ~/Applications/"Dungeon Siege Native.app"
 ```
 
+Own the **Steam** edition instead? `./install.sh --steam` (see the guide for the download).
+
 For the newest experimental work as a second app, **Dungeon Siege Nightly**: `./install.sh --nightly`.
 
 **Full instructions: [docs/INSTALL.md](docs/INSTALL.md)**: requirements, installing, playing, settings, updating and
