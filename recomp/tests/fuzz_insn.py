@@ -45,6 +45,7 @@ def build():
     out += ['  {0x%08xu, t_%08x},\n' % (v, v) for v in vas]
     out.append('};\nconst unsigned rt_fntab_n = %d;\n' % len(vas))
     out.append('const struct rt_imp { uint32_t iat; const char *name; } rt_imptab[] = {{0, ""}};\nconst unsigned rt_imptab_n = 0;\n')
+    out.append('const struct rt_image { const char *name; uint32_t base, imp_first, imp_count; } rt_images[] = {{"", 0, 0, 0}};\nconst unsigned rt_images_n = 0;\n')
     open(os.path.join(WORK, 'fuzz.c'), 'w').write(''.join(out))
     json.dump(vas, open(os.path.join(WORK, 'vas.json'), 'w'))
     subprocess.check_call(['clang', '-O1', '-ffp-contract=off', '-shared', '-fPIC', '-I', os.path.join(ROOT, 'runtime'),
