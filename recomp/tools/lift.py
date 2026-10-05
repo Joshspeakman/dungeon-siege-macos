@@ -35,6 +35,7 @@ JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd',
 # instruction the runtime may perform the whole call (including the return) itself.
 OVERRIDES = {
     0x0041aea9: 'crc32 (W32_CRCLOG: FuBi digest inputs)',
+    0x004b7d69: 'default Shadows setting (All Complex on every Mac)',
     0x005cfa0d: 'ToString(eJobAbstractType)',
     0x005cfa1e: 'FromString(const char*, eJobAbstractType&)',
     0x005cfa33: 'job type flag mask',
