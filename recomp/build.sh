@@ -1,12 +1,14 @@
 #!/bin/bash
 # build.sh <DungeonSiege.exe> [outdir]
-# Recompile the user's own GOG 1.11.1 DungeonSiege.exe to arm64: analysis -> C -> libgame.dylib.
+# Recompile the user's own GOG or Steam 1.11.1 DungeonSiege.exe to arm64: analysis -> C -> libgame.dylib.
 # Everything generated is derived from the executable and stays local (work/ is git-ignored).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 EXE="${1:?usage: build.sh <DungeonSiege.exe> [outdir]}"; OUT="${2:-$HERE/work/full}"
-SHA=41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02
-[ "$(shasum -a 256 "$EXE" | cut -d' ' -f1)" = "$SHA" ] || { echo "not the original GOG 1.11.1 DungeonSiege.exe (sha256 $SHA)"; exit 1; }
+SHA=41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02          # GOG 1.11.1
+SHA_STEAM=c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab    # Steam 1.11.1 (app 39190): same build, no GOG fixes
+case "$(shasum -a 256 "$EXE" | cut -d' ' -f1)" in "$SHA"|"$SHA_STEAM") ;;
+  *) echo "not the original GOG or Steam 1.11.1 DungeonSiege.exe"; exit 1;; esac
 PY="$HERE/.venv/bin/python"
 [ -x "$PY" ] || { python3 -m venv "$HERE/.venv" && "$HERE/.venv/bin/pip" install -q capstone==5.0.7 unicorn==2.1.4; }
 mkdir -p "$HERE/work"

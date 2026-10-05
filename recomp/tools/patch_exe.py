@@ -2,9 +2,10 @@
 """Small byte patches applied to the copy of DungeonSiege.exe that the native build recompiles (recomp/build.sh). Only
 the user's own copy is touched, after checking its exact original bytes; anything unrecognised is refused.
 
-  patch_exe.py <DungeonSiege.exe> [--revert] [--status]      GOG Dungeon Siege 1.11.1 only (SHA-256 checked)
-    fpscap     the engine's hard-coded 60 fps limiter (maxfps=60.0f stored at VA 0x41617d) -> 0.0 (= no cap); the
-               native renderer paces frames instead.
+  patch_exe.py <DungeonSiege.exe> [--revert] [--status]      Dungeon Siege 1.11.1, GOG or Steam (SHA-256 checked)
+    fpscap     the engine's 60 fps limiter -> no cap (the native renderer paces frames instead): GOG's executable
+               stores maxfps=60.0f at VA 0x41617d, which becomes 0.0; Steam's reads maxfps from the configuration
+               there, which is replaced by the same store of 0.0 (the two are then identical at that spot).
     mmc        the driver flag manual_mouse_copy forced off (init at VA 0x656793, driver-db store at VA 0x51d18f): the
                software cursor's save/restore uses Blt instead of locking the whole frame.
     vidcursor  the cursor's 128x128 work surface (caps at VA 0x656b19) created in video memory.
@@ -13,6 +14,8 @@ import hashlib, os, shutil, struct, sys
 
 EXE_SHA_ORIG = '41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02'   # GOG 1.11.1 DungeonSiege.exe
 EXE_SHA_PATCHED = 'bd0ff29165ecdeb7a277fc307bacb3e3d62d18bd02096a53a872a215de251bc9'  # with all three patches below
+# Steam's DungeonSiege.exe (app 39190, depot 39191): the same 1.11.1 build without GOG's few fixes (and no DRM)
+EXE_SHA_STEAM = 'c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab'
 
 # (name, file offset, original bytes, patched bytes, context check (offset, bytes) or None)
 EXE_PATCHES = [
@@ -30,11 +33,21 @@ def backup(path, suffix):
     if not os.path.exists(b): shutil.copy2(path, b)
     return b
 
+STEAM_FPSCAP = ('fpscap', 0x1617d, bytes.fromhex('57683c1176008d4804e8cf39000084c07442'),
+                bytes.fromhex('c70700000000') + b'\x90' * 12, None)
+
+def edition(data):
+    """'steam' when the maxfps spot holds Steam's configuration read (original or patched), else 'gog'"""
+    return 'steam' if bytes(data[0x1617d:0x1618f]) == STEAM_FPSCAP[2] or hashlib.sha256(data).hexdigest() == EXE_SHA_STEAM else 'gog'
+
 def patch(path, revert=False, status=False):
     data = bytearray(open(path, 'rb').read()); h = hashlib.sha256(data).hexdigest()
+    global EXE_PATCHES, EXE_SHA_ORIG
+    if edition(data) == 'steam':
+        EXE_PATCHES = [STEAM_FPSCAP] + EXE_PATCHES[1:]; EXE_SHA_ORIG = EXE_SHA_STEAM
     states = []
     for name, off, orig, new, ctx in EXE_PATCHES:
-        if ctx and data[ctx[0]:ctx[0] + len(ctx[1])] != ctx[1]: sys.exit(f'{name}: unexpected context bytes at {ctx[0]:#x}; not GOG 1.11.1?')
+        if ctx and data[ctx[0]:ctx[0] + len(ctx[1])] != ctx[1]: sys.exit(f'{name}: unexpected context bytes at {ctx[0]:#x}; not Dungeon Siege 1.11.1?')
         cur = bytes(data[off:off + len(orig)])
         states.append((name, 'original' if cur == orig else 'patched' if cur == new else 'unknown'))
     if status:
