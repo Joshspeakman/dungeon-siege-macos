@@ -36,6 +36,7 @@ JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd',
 OVERRIDES = {
     0x0041aea9: 'crc32 (W32_CRCLOG: FuBi digest inputs)',
     0x004b7d69: 'default Shadows setting (All Complex on every Mac)',
+    0x00517017: 'paper doll camera for the screen size (any resolution, not only the listed ones)',
     0x005cfa0d: 'ToString(eJobAbstractType)',
     0x005cfa1e: 'FromString(const char*, eJobAbstractType&)',
     0x005cfa33: 'job type flag mask',
