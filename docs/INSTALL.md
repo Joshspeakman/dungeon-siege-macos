@@ -49,9 +49,31 @@ What goes where:
 
 To update: `git pull`, then run the same `install.sh` command again (saves are kept).
 
+### The Steam edition
+
+Steam's Dungeon Siege (app 39190) works too. Steam on the Mac doesn't install Windows games, but its console downloads
+them: open `steam://open/console` (or Steam's console) and enter
+
+```
+download_depot 39190 39191
+```
+
+then run
+
+```sh
+./install.sh --steam              # finds Steam's download; or: ./install.sh --steam "/path/to/the/downloaded/folder"
+```
+
+The download is copied into the data folder (`steam-game`), so Steam may clean up its own copy afterwards. Steam's
+`DungeonSiege.exe` is the same 1.11.1 build as GOG's (no DRM), minus GOG's few small fixes. Windows refuses to mix
+Steam and GOG copies in multiplayer, but this build presents itself as GOG 1.11.1, so you can play with GOG players and
+with PCs running the GOG executable. To play with unmodified Steam copies instead, start it with
+`DS_STEAM_IDENTITY=steam`. Everything else (the launcher, mods, Legends of Aranna, `--nightly`) works the same way.
+
 ### Backing up and setting up again
 
-Keep one backup folder with everything, and a new or reinstalled Mac is set up with one command:
+Keep one backup folder with everything, and a new or reinstalled Mac is set up with one command (a Steam copy works in
+the collection too):
 
 ```sh
 ./install.sh --save-collection "/Volumes/Backup/Dungeon Siege collection"    # write the backup
