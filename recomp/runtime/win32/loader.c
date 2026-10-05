@@ -208,7 +208,8 @@ int w32_load(const char *exe_path)
         w32_cmdline_a = at; put_str(&at, cl);
     }
     w32_cmdline_w = at; at += 2 * (uint32_t)w32_mb_to_wide(1252, (const uint8_t *)GS(w32_cmdline_a), -1, (uint16_t *)GP(at), 512); at = (at + 3) & ~3u;
-    static const char *env[] = {"ALLUSERSPROFILE=C:\\ProgramData", "COMPUTERNAME=MAC", "OS=Windows_NT",
+    static char cname[48]; { void w32_computer_name(char *, size_t); char n[32]; w32_computer_name(n, sizeof n); snprintf(cname, sizeof cname, "COMPUTERNAME=%s", n); }
+    const char *env[] = {"ALLUSERSPROFILE=C:\\ProgramData", cname, "OS=Windows_NT",
         "PATH=C:\\Windows\\system32;C:\\Windows", "SystemRoot=C:\\Windows", "TEMP=C:\\Temp", "TMP=C:\\Temp",
         "USERNAME=player", "USERPROFILE=C:\\Users\\player", "windir=C:\\Windows", 0};
     w32_env_a = at;
