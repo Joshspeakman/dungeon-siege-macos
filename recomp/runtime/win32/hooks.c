@@ -118,6 +118,19 @@ int rt_override(Ctx *c, uint32_t addr)
     }
     if (addr == 0x5338e9u || addr == 0x694970u) { int native_override(Ctx *, uint32_t); if (native_override(c, addr)) return 1; }   /* native maths */
     if (addr == 0x5d2679u || addr == 0x5fbb3cu || addr == 0x5faf98u || addr == 0x574789u || addr == 0x5d281fu || addr == 0x5fae2eu || addr == 0x565464u || addr == 0x57470du) { int mpfeel_override(Ctx *, uint32_t); if (mpfeel_override(c, addr)) return 1; }   /* multiplayer feel */
+    if (addr == 0x42cda8u) {                      /* DS_REPORTLOG: the engine's warnings/asserts formatter (fmt, ...) */
+        if (!getenv("DS_REPORTLOG")) return 0;
+        uint32_t f = ARG(0); const char *fmt = f ? (const char *)GP(f) : ""; char out[2048]; size_t o = 0; int ai = 1;
+        for (const char *q = fmt; *q && o < sizeof out - 300; q++) {
+            if (*q != '%') { out[o++] = *q; continue; }
+            q++; while (*q && strchr("0123456789.-#l", *q)) q++;
+            if (*q == '%') { out[o++] = '%'; continue; }
+            uint32_t v = ARG(ai++);
+            if (*q == 's') o += (size_t)snprintf(out + o, 256, "%s", v ? (const char *)GP(v) : "(null)");
+            else o += (size_t)snprintf(out + o, 24, "0x%x", v);
+        }
+        out[o] = 0; fprintf(stderr, "warning: %s\n", out); return 0;
+    }
     if (addr == 0x412d12u) return loa_override(c, addr);       /* DS_REPORTLOG: the engine's reports, in any game */
     return loa_active ? loa_override(c, addr) : 0;
 }

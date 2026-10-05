@@ -44,6 +44,7 @@ OVERRIDES = {
     0x00565464: 'Server: planner lag (from the network round trip on a Mac host)',
     0x0057470d: 'WorldTime::Update (a joiner\'s clock follows the host smoothly)',
     0x0041aea9: 'crc32 (W32_CRCLOG: FuBi digest inputs)',
+    0x0042cda8: 'report formatter (DS_REPORTLOG: the engine\'s warnings)',
     0x004b7d69: 'default Shadows setting (All Complex on every Mac)',
     0x005cfa0d: 'ToString(eJobAbstractType)',
     0x005cfa1e: 'FromString(const char*, eJobAbstractType&)',
