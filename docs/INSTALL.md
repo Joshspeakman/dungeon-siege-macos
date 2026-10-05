@@ -63,8 +63,21 @@ launcher's settings (a GOG offline installer can be put in it instead of the gam
 into the data folder, restores saves and settings when the Mac has none yet, adds the expansion and mods, and builds
 the app; the backup can be unplugged afterwards. Keep the collection private: it holds your own copies of the games.
 
-To uninstall: delete `~/Applications/Dungeon Siege Native.app`, and `~/Games/DungeonSiegeNative` if you no longer want
-your saves.
+### Nightly: the newest experimental work
+
+```sh
+./install.sh --nightly          # install or update "Dungeon Siege Nightly.app"
+```
+
+Work in progress lands on the repository's `nightly` branch first and reaches `main` (the stable app) once it has
+proven itself. `--nightly` fetches the newest `nightly` from GitHub, builds it in `build/nightly` (your checkout stays
+as it is) and installs **Dungeon Siege Nightly.app** next to the stable **Dungeon Siege Native.app**, so you can play
+either. Both use the same data folder: saves, settings and mods are shared, and saves work in both; each keeps its own
+log (`DungeonSiegeNative.log` / `DungeonSiegeNightly.log`). Run the same command again to update it. It uses the game
+folder of the app you already have (or give `--game-dir` as usual). Expect rough edges: that is what it is for.
+
+To uninstall: delete `~/Applications/Dungeon Siege Native.app` (and `Dungeon Siege Nightly.app`), and
+`~/Games/DungeonSiegeNative` if you no longer want your saves.
 
 ## Playing
 
