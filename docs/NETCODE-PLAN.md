@@ -19,7 +19,25 @@ starts about half a second later**, worse over the internet. In single player it
   runs about one one-way delay behind the host (segments arrive late) and the world can jolt by up to ~0.17 s once a
   second.
 
-## Rule for every change
+## What was measured (October 2026, LAN with an 18 ms round trip; the other machine ran the GOG game under Wine)
+
+A click took **0.4-0.5 s** to move the hero, joining either way. It is made of:
+
+| Part | Size | Why |
+|---|---|---|
+| the order reaching the host | 80-130 ms | the joining game's own send timing (the network is ~10 ms) |
+| the host's planner lag | 110-225 ms | the game sets it to half its own ping of the slowest player; that ping counts the other game's reply delay (~260 ms here) and jumps up on any slow reply |
+| the joiner waiting for the plan's start | 100-250 ms | the lag above, plus the joiner's clock error (it swung +-100 ms) |
+| the host itself | 1-40 ms | from the order to the plan going out |
+
+Done so far (branch `netcode-perf`, `recomp/runtime/win32/mpfeel.c`):
+- **Mac host:** planner lag from the real network round trip (half of it + 60 ms): about 70 ms on a LAN instead of 110-225.
+- **Mac joiner:** the joiner's clock counts half the round trip and is corrected smoothly (within ~15 ms of the host instead of +-100 ms);
+  each own hero plays the plan that starts it moving at once instead of waiting out the host's lead.
+- **Tools:** `DS_MPFEEL=1` logs click-to-movement and its parts on joiners, job-to-plan on hosts; `DP8_LAG` and the `lag:` test
+  command simulate delay; `DP8_STATS=1` link and send-queue statistics.
+
+
 
 Nothing changes on the wire: Windows (and Linux/Proton) players must stay compatible. Everything below changes how
 the Mac *handles* the same messages, or, when the Mac hosts, *when* it sends them.

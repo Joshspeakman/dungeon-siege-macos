@@ -1,5 +1,6 @@
 // DSR native renderer core: Direct3D 7 fixed-function state + DirectDraw surfaces on Metal.
 #import "renderer.h"
+#import <QuartzCore/QuartzCore.h>
 #include "../dsr/dsr_proto.h"
 #include <stdio.h>
 #include <string.h>
@@ -258,8 +259,11 @@ static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int
     v.layouts[0].stride = stride;
     if (!(fvf & 0x40) || !((fvf >> 8) & 0xf)) { v.layouts[2].stride = 16; v.layouts[2].stepFunction = MTLVertexStepFunctionConstant; v.layouts[2].stepRate = 0; }
     d.vertexDescriptor = v;
+    double t0 = CACurrentMediaTime();
     p = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
     if (!p) { fprintf(stderr, "pipeline fvf %x: %s\n", fvf, err.localizedDescription.UTF8String); return nil; }
+    static int psolog = -1; if (psolog < 0) psolog = getenv("DSR_PSOLOG") != 0;
+    if (psolog) fprintf(stderr, "dsr: new pipeline %#llx in %.1f ms (frame %d)\n", (unsigned long long)key, (CACurrentMediaTime() - t0) * 1000, dsr_frame);
     if (r->pso_n < 768) { r->pso_k[h] = key; r->pso_v[h] = p; r->pso_n++; r->pso_last = h; }   // the game uses a few dozen
     return p;
 }
