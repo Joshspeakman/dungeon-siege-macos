@@ -89,7 +89,9 @@ struct dp8_conn {
     struct dp8_conn *next;
 };
 typedef struct Pend { struct Pend *next; dp8_conn *c; uint8_t user; size_t len; uint8_t data[]; } Pend;
+typedef struct Delayed { struct Delayed *next; uint32_t due; struct sockaddr_in to; size_t len; int k; uint8_t data[]; } Delayed;
 struct dp8_ep {
+    Delayed *lagq, *rxq; pthread_mutex_t lagm;                             /* DP8_LAG: datagrams waiting to go out / be handled */
     int fd, fd_enum; uint16_t port; int listening; dp8_callbacks cb; pthread_mutex_t lock; pthread_t thread; int stop;
     dp8_conn *conns; int wake[2];
     Pend *pend, *pend_tail;                 /* received messages, handed up after the lock is released */
@@ -105,9 +107,34 @@ static void trace(const char *dir, const struct sockaddr_in *a, const uint8_t *p
     for (size_t i = 0; i < len && (i < 40 || on >= 2 || (len > 1 && p[0] == 0 && p[1] == 3)); i++) fprintf(stderr, " %02x", p[i]);   /* enumeration answers in full */
     fprintf(stderr, "\n");
 }
+/* DP8_LAG=<ms>[,<jitter ms>]: every datagram this side sends or receives waits that long (plus a random part up to the
+ * jitter, so some arrive out of order), for testing internet-like delays on a LAN with only this side changed: the round
+ * trip grows by twice that */
+static int lag_ms = -1, lag_jitter;
+void dp8_set_lag(int ms, int jitter) { lag_ms = ms > 0 ? ms : 0; lag_jitter = jitter > 0 ? jitter : 0; }   /* tests: change it during a game */
+static void lag_init(void) { if (lag_ms >= 0) return; const char *e = getenv("DP8_LAG"); lag_ms = e ? atoi(e) : 0; const char *j = e ? strchr(e, ',') : 0; lag_jitter = j ? atoi(j + 1) : 0; }
+static void lag_flush(dp8_ep *ep)
+{
+    if (!ep->lagq) return;
+    uint32_t now = dp8_tick();
+    pthread_mutex_lock(&ep->lagm);
+    for (Delayed **pp = &ep->lagq; *pp; ) {
+        Delayed *d = *pp;
+        if ((int32_t)(now - d->due) >= 0) { sendto(ep->fd, d->data, d->len, 0, (const struct sockaddr *)&d->to, sizeof d->to); *pp = d->next; free(d); }
+        else pp = &d->next;
+    }
+    pthread_mutex_unlock(&ep->lagm);
+}
 static void raw_send(dp8_ep *ep, const struct sockaddr_in *to, const void *buf, size_t len)
 {
     trace("send", to, buf, len, 0);
+    lag_init();
+    if (lag_ms > 0) {
+        Delayed *d = malloc(sizeof *d + len); d->next = 0; d->to = *to; d->len = len; memcpy(d->data, buf, len);
+        d->due = dp8_tick() + (uint32_t)lag_ms + (lag_jitter > 0 ? arc4random_uniform((uint32_t)lag_jitter + 1) : 0);
+        pthread_mutex_lock(&ep->lagm); Delayed **pp = &ep->lagq; while (*pp) pp = &(*pp)->next; *pp = d; pthread_mutex_unlock(&ep->lagm);
+        return;
+    }
     if (getenv("DP8_DROP") && arc4random_uniform(100) < (uint32_t)atoi(getenv("DP8_DROP"))) return;   /* tests: simulated loss */
     sendto(ep->fd, buf, len, 0, (const struct sockaddr *)to, sizeof *to);
 }
@@ -425,12 +452,25 @@ static void *net_thread(void *arg)
     dp8_ep *ep = arg; uint8_t buf[2048];
     while (!ep->stop) {
         struct pollfd pf[3] = {{ep->fd, POLLIN, 0}, {ep->fd_enum, POLLIN, 0}, {ep->wake[0], POLLIN, 0}};
-        poll(pf, 3, 10);
+        poll(pf, 3, ep->lagq || ep->rxq ? 1 : 10);
+        lag_flush(ep);
         for (int k = 0; k < 2; k++) if (pf[k].revents & POLLIN) for (;;) {
             struct sockaddr_in from; socklen_t fl = sizeof from;
             ssize_t n = recvfrom(k ? ep->fd_enum : ep->fd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
             if (n <= 0) break;
+            lag_init();
+            if (lag_ms > 0) {                                   /* DP8_LAG: handled later (this thread only) */
+                Delayed *d = malloc(sizeof *d + (size_t)n); d->next = 0; d->to = from; d->len = (size_t)n; d->k = k; memcpy(d->data, buf, (size_t)n);
+                d->due = dp8_tick() + (uint32_t)lag_ms + (lag_jitter > 0 ? arc4random_uniform((uint32_t)lag_jitter + 1) : 0);
+                Delayed **pp = &ep->rxq; while (*pp) pp = &(*pp)->next; *pp = d;
+                continue;
+            }
             on_packet(ep, &from, buf, (size_t)n, k);
+        }
+        for (Delayed **pp = &ep->rxq; *pp; ) {
+            Delayed *d = *pp;
+            if ((int32_t)(dp8_tick() - d->due) >= 0) { *pp = d->next; on_packet(ep, &d->to, d->data, d->len, d->k); free(d); }
+            else pp = &d->next;
         }
         if (pf[2].revents & POLLIN) { char t[64]; while (read(ep->wake[0], t, sizeof t) > 0) {} }
         tick(ep);
@@ -454,7 +494,7 @@ dp8_ep *dp8_open(uint16_t port_lo, uint16_t port_hi, int listen, uint16_t enum_p
     if (!port_lo) { struct sockaddr_in a; socklen_t l = sizeof a; getsockname(fd, (struct sockaddr *)&a, &l); port = ntohs(a.sin_port); }
     dp8_ep *ep = calloc(1, sizeof *ep); ep->fd = fd; ep->port = port; ep->listening = listen; ep->cb = *cb;
     ep->fd_enum = enum_port && enum_port != port ? bind_udp(enum_port) : -1;           /* like DPNSVR: queries on the well-known port */
-    pthread_mutex_init(&ep->lock, 0); pipe(ep->wake); fcntl(ep->wake[0], F_SETFL, O_NONBLOCK);
+    pthread_mutex_init(&ep->lock, 0); pthread_mutex_init(&ep->lagm, 0); pipe(ep->wake); fcntl(ep->wake[0], F_SETFL, O_NONBLOCK);
     pthread_create(&ep->thread, 0, net_thread, ep);
     return ep;
 }
@@ -497,5 +537,7 @@ void dp8_close(dp8_ep *ep)
     ep->stop = 1; write(ep->wake[1], "x", 1); pthread_join(ep->thread, 0);
     close(ep->fd); if (ep->fd_enum >= 0) close(ep->fd_enum); close(ep->wake[0]); close(ep->wake[1]);
     while (ep->conns) { dp8_conn *c = ep->conns; ep->conns = c->next; conn_free_buffers(c); free(c); }
-    pthread_mutex_destroy(&ep->lock); free(ep);
+    while (ep->lagq) { Delayed *d = ep->lagq; ep->lagq = d->next; free(d); }
+    while (ep->rxq) { Delayed *d = ep->rxq; ep->rxq = d->next; free(d); }
+    pthread_mutex_destroy(&ep->lock); pthread_mutex_destroy(&ep->lagm); free(ep);
 }
