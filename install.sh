@@ -52,10 +52,12 @@ done
 APP_NAME="Dungeon Siege Native"; APP_SHOWN="Dungeon Siege"; APP_ID=native; APP_LOG=DungeonSiegeNative
 [ -n "$AS_NIGHTLY" ] && { APP_NAME="Dungeon Siege Nightly"; APP_SHOWN="Dungeon Siege Nightly"; APP_ID=nightly; APP_LOG=DungeonSiegeNightly; }
 # the game folder an installed app uses (for reinstalls and updates without options)
-installed_game() {
-  local a L; for a in "Dungeon Siege Native" "Dungeon Siege Nightly"; do
-    L="$APPS/$a.app/Contents/MacOS/launcher"
-    [ -f "$L" ] && sed -n 's/^GAME="\${DS_GAME_DIR:-\(.*\)}"; DATA=.*/\1/p' "$L" | head -1 && return 0
+installed_game() {     # the game folder an installed app was set up with
+  local a L v x; for a in "Dungeon Siege Native" "Dungeon Siege Nightly"; do
+    L="$APPS/$a.app/Contents/MacOS/launcher"; [ -f "$L" ] || continue
+    v="$(grep -m1 '^DEF_GAME=' "$L" | cut -d= -f2-)"           # current launchers: shell-quoted (printf %q)
+    if [ -n "$v" ]; then eval "x=$v"; printf '%s\n' "$x"; return 0; fi
+    sed -n 's/^GAME="\${DS_GAME_DIR:-\(.*\)}"; DATA=.*/\1/p' "$L" | head -1; return 0   # older ones: inline
   done; return 0
 }
 # --nightly: fetch the nightly branch into build/nightly and let its own install.sh install the nightly app
