@@ -57,7 +57,8 @@ int tank_read(const char *archive, const char *path, uint8_t **out, size_t *outl
         uint8_t *buf = calloc(1, size ? size : 1); if (!buf) continue;
         if (fmt == 0) { if (IN((uint64_t)dataoff + foff, size)) memcpy(buf, d + dataoff + foff, size); }
         else {
-            uint32_t o2 = (o + 30 + nlen + 1 + 3) & ~3u, chunk = u32(d, o2 + 4), nch = chunk ? (size + chunk - 1) / chunk : 0, w = 0;
+            uint32_t o2 = (o + 30 + nlen + 1 + 3) & ~3u; if (!IN(o2, 8)) { free(buf); continue; }
+            uint32_t chunk = u32(d, o2 + 4), nch = chunk ? (size + chunk - 1) / chunk : 0, w = 0;
             o2 += 8;
             if (!IN(o2, 16ull * nch)) nch = 0;
             for (uint32_t ch = 0; ch < nch && w <= size; ch++) {
