@@ -35,6 +35,19 @@ Newer and faster Macs must simply get more:
 Overall: a flat 60 fps on a base M1 everywhere, big fights included, about 65% at native resolution after steps 2–4
 and 6, about 85% with step 5. A flat 120 on an M1 Pro: about 50%, limited mostly by the game thread in large fights.
 
+## Done so far (branch `netcode-perf`)
+
+- **Measuring:** test mode's once-a-second line gives GPU time per frame (average and max), the longest frame and the
+  frames over 25 ms; `DSR_PSOLOG=1` logs pipeline compiles. Forest scene, 1024x768, M1 Pro: GPU 2.75 ms per frame.
+- **Renderer CPU:** C hash tables instead of Objective-C dictionaries, uniforms copied once, unchanged encoder state
+  skipped: render-command time about halved.
+- **Renderer GPU:** draws without alpha testing use a shader without `discard`, so hidden-surface removal works for
+  them: GPU time -13% (3.15 -> 2.75 ms), peaks 5.7 -> 4.1 ms; images identical.
+- **Hitches:** pipeline compiles measured at 0.2 ms or less with the system shader cache: not a hitch source, so no
+  binary archive is needed.
+- **Defaults:** view distance starts at Very Far (200%) on Max and Ultra chips, Farther (150%) elsewhere; the frame
+  rate already follows the display.
+
 ## Reinstalling
 
 Everything here is code in this repository; settings it adds are defaults the app chooses itself. After a reinstall,
