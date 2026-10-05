@@ -8,8 +8,10 @@
  * the latency it measured, up to half a second, and it varies), and a joiner otherwise waits for that start time on its
  * own clock. Each hero this machine gives orders to is played on its own clock, advanced by the lead of the plan that
  * started it moving: when a plan arrives for a hero standing still (nothing queued), its advance becomes that plan's
- * lead, so it starts at once (a standing hero can't visibly jump); while it moves the advance stays. Everything else
- * plays as before. DS_NO_OWN_LEAD=1 turns it off.
+ * lead, so it starts at once (a standing hero can't visibly jump). While it walks, the advance shrinks to nothing (it
+ * plays 15% slower for a second or so): a hero ahead of the host would have to jump when it's redirected, since the
+ * host plans the new path from where it has the hero; caught up, it turns smoothly. Everything else plays as before.
+ * DS_NO_OWN_LEAD=1 turns it off.
  *
  * When this Mac hosts, the planner's lead comes from the network's real round trip. The game takes it from its own ping
  * of each player, which also counts how long that player's game takes to send its reply (some 250 ms more with a
@@ -51,7 +53,7 @@ static int go_pos(Ctx *c, uint32_t go, float p[3], uint32_t *node)
 static double rd(uint32_t a) { double d; uint64_t v = (uint64_t)rt_r32(G_MEM, a) | (uint64_t)rt_r32(G_MEM, a + 4) << 32; memcpy(&d, &v, 8); return d; }
 static double joiner_clock(void) { uint32_t wt = rt_r32(G_MEM, 0x7a05ccu); return wt ? rd(wt + 0x10) : 0; }   /* WorldTime: seconds */
 /* own heroes and the lead they are played with */
-static uint32_t own[16]; static double own_adv[16]; static int nown;
+static uint32_t own[16]; static double own_adv[16], own_last[16]; static int nown;
 static int own_slot(uint32_t go) { for (int k = 0; k < nown; k++) if (own[k] == go) return k; return -1; }
 static int is_own(uint32_t go) { return own_slot(go) >= 0; }
 static double clock_pending;                                /* seconds the joiner's clock still has to move */
@@ -130,7 +132,7 @@ static int feel_impl(Ctx *c, uint32_t addr)
             }
         }
         if (k < 0) return 0;
-        if (rt_r32(G_MEM, c->ecx + 0x54) == 0) own_adv[k] = lead < 0 ? 0 : lead > 0.5 ? 0.5 : lead;   /* standing still */
+        if (rt_r32(G_MEM, c->ecx + 0x54) == 0) { own_adv[k] = lead < 0 ? 0 : lead > 0.5 ? 0.5 : lead; own_last[k] = 0; }   /* standing still */
         if (probe.armed && !probe.seg && go == probe.go) { probe.seg = 1; probe.t_seg = now_us(); probe.lead = lead; }
         return 0;
     }
@@ -140,6 +142,9 @@ static int feel_impl(Ctx *c, uint32_t addr)
         if (k >= 0 && own_adv[k] > 0 && lead_on() && is_joiner(c)) {   /* play it on its advanced clock */
             static int inside; uint32_t wt = rt_r32(G_MEM, 0x7a05ccu);
             if (!inside && wt) {
+                double now = rd(wt + 0x10);                 /* walking: let the advance shrink (15% of the time passed) */
+                if (rt_r32(G_MEM, c->ecx + 0x54) && own_last[k] > 0 && now > own_last[k]) { own_adv[k] -= (now - own_last[k]) * 0.15; if (own_adv[k] < 0) own_adv[k] = 0; }
+                own_last[k] = now;
                 uint32_t lo = rt_r32(G_MEM, wt + 0x10), hi = rt_r32(G_MEM, wt + 0x14), a = ARG(0);
                 double t = rd(wt + 0x10) + own_adv[k]; uint64_t v; memcpy(&v, &t, 8);
                 rt_w32(G_MEM, wt + 0x10, (uint32_t)v); rt_w32(G_MEM, wt + 0x14, (uint32_t)(v >> 32));
