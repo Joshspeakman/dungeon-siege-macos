@@ -28,6 +28,9 @@ enum {
     /* MAX_FRAME: payload per frame; with the frame header (up to 16) and IP/UDP (28) a datagram stays under 1,210 bytes,
      * within the 1,280 every internet path carries (VPN tunnels such as WireGuard's 1,380 dropped 1,432-byte ones) */
     VERSION = 0x00010005u, MAX_FRAME = 1160, WINDOW = 64,
+    /* limits against a hostile peer (nothing the game sends comes near them): one message's size, connections still
+     * in the handshake in all and from one address, and how long a closed connection is kept before it is freed */
+    MAX_MESSAGE = 32 << 20, MAX_HALF_OPEN = 64, MAX_HALF_OPEN_PER_IP = 8, REAP_MS = 15000,
 };
 uint32_t dp8_tick(void) { return (uint32_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000); }
 static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
@@ -180,7 +183,7 @@ static void pump(dp8_conn *c)
             uint8_t cmd = CMD_DATA | CMD_RELIABLE | CMD_SEQUENTIAL | m->user | (k == 0 ? CMD_NEW_MSG : 0) | (k + 1 == frames ? CMD_END_MSG : 0);
             if (k + 1 == frames && !c->q->next) cmd |= CMD_POLL;                       /* last frame of a burst: ACK now */
             uint8_t seq = c->next_send++; Frame *f = &c->win[seq];
-            f->buf = malloc(4 + n); f->buf[0] = cmd; f->buf[1] = 0; memcpy(f->buf + 4, m->data + off, n); f->len = 4 + n;
+            free(f->buf); f->buf = malloc(4 + n); f->buf[0] = cmd; f->buf[1] = 0; memcpy(f->buf + 4, m->data + off, n); f->len = 4 + n;
             f->retries = 0; f->acked = 0; f->rto = c->rtt * 5 / 2 + 100;
             transmit(c, seq, 0);
         }
@@ -195,7 +198,7 @@ static void enqueue(dp8_conn *c, const void *data, size_t len, uint8_t user)
 static void send_keepalive(dp8_conn *c, uint8_t ctl_extra)
 {
     uint8_t seq = c->next_send++; Frame *f = &c->win[seq];
-    f->buf = malloc(8); f->buf[0] = CMD_DATA | CMD_RELIABLE | CMD_SEQUENTIAL | CMD_POLL | CMD_NEW_MSG | CMD_END_MSG; f->buf[1] = CTL_KEEPALIVE | ctl_extra;
+    free(f->buf); f->buf = malloc(8); f->buf[0] = CMD_DATA | CMD_RELIABLE | CMD_SEQUENTIAL | CMD_POLL | CMD_NEW_MSG | CMD_END_MSG; f->buf[1] = CTL_KEEPALIVE | ctl_extra;
     put32(f->buf + 4, c->sessid); f->len = 8; f->retries = 0; f->acked = 0; f->rto = c->rtt * 5 / 2 + 100;
     if (ctl_extra & CTL_END_STREAM) { c->end_seq = seq; f->buf[1] = CTL_END_STREAM; f->len = 4; }   /* END_STREAM: no payload */
     transmit(c, seq, 0);
@@ -204,12 +207,13 @@ static void conn_free_buffers(dp8_conn *c)
 {
     for (int i = 0; i < 256; i++) { free(c->win[i].buf); c->win[i].buf = 0; free(c->rx[i].data); c->rx[i].data = 0; c->rx[i].have = 0; }
     while (c->q) { Msg *m = c->q; c->q = m->next; free(m->data); free(m); } c->qtail = 0;
-    free(c->part); c->part = 0;
+    free(c->part); c->part = 0; c->partcap = c->partlen = 0; c->inpart = 0;
 }
 static void conn_close(dp8_conn *c, int reason)
 {
     if (c->state == ST_CLOSED) return;
     c->state = ST_CLOSED; c->closed_reason = reason; c->closed_at = dp8_tick();
+    conn_free_buffers(c);                       /* the struct stays until it is reaped (TIME_WAIT, the upper layer let go) */
 }
 /* acknowledgements from the remote side */
 static void handle_acks(dp8_conn *c, uint8_t nrcv, uint64_t sack)
@@ -266,7 +270,12 @@ static void consume(dp8_conn *c, uint8_t cmd, uint8_t ctl, const uint8_t *p, siz
     if ((cmd & CMD_NEW_MSG) && (cmd & CMD_END_MSG)) { c->inpart = 0; deliver(c, user, p, len); return; }
     if (cmd & CMD_NEW_MSG) { c->inpart = 1; c->partlen = 0; c->partuser = user; }
     if (!c->inpart) return;
-    if (c->partlen + len > c->partcap) { c->partcap = (c->partlen + len) * 2; c->part = realloc(c->part, c->partcap); }
+    if (c->partlen + len > MAX_MESSAGE) { conn_close(c, DP8_CLOSE_LOST); return; }      /* a hostile peer: no end */
+    if (c->partlen + len > c->partcap) {
+        size_t cap = (c->partlen + len) * 2; uint8_t *n = realloc(c->part, cap);
+        if (!n) { conn_close(c, DP8_CLOSE_LOST); return; }
+        c->part = n; c->partcap = cap;
+    }
     memcpy(c->part + c->partlen, p, len); c->partlen += len;
     if (cmd & CMD_END_MSG) { c->inpart = 0; deliver(c, c->partuser, c->part, c->partlen); }
 }
@@ -340,6 +349,10 @@ static void handle_cframe(dp8_ep *ep, dp8_conn *c, const struct sockaddr_in *fro
         if ((ver >> 16) != 1) return;
         if (c) { if (c->state == ST_ACCEPTING && c->sessid == sess) send_cframe(c, CMD_CFRAME | CMD_POLL, OP_CONNECTED, p[2]); return; }
         if (!ep->listening) return;
+        int half = 0, same = 0;                     /* a flood of (spoofable) CONNECTs must not pile up connections */
+        for (dp8_conn *z = ep->conns; z; z = z->next)
+            if (z->state == ST_ACCEPTING) { half++; same += z->addr.sin_addr.s_addr == from->sin_addr.s_addr; }
+        if (half >= MAX_HALF_OPEN || same >= MAX_HALF_OPEN_PER_IP) return;
         c = new_conn(ep, from, ST_ACCEPTING, sess); c->remote_version = ver; c->crsp = p[2];
         send_cframe(c, CMD_CFRAME | CMD_POLL, OP_CONNECTED, p[2]);
         return;
@@ -355,7 +368,7 @@ static void handle_cframe(dp8_ep *ep, dp8_conn *c, const struct sockaddr_in *fro
         return;
     }
     if (op == OP_HARD_DISCONNECT) {
-        if (!c || c->state < ST_ESTABLISHED) return;
+        if (!c || c->state < ST_ESTABLISHED || sess != c->sessid) return;
         if (c->state == ST_HARD_CLOSING) { conn_close(c, DP8_CLOSE_NORMAL); return; }
         for (int i = 0; i < 3; i++) send_cframe(c, CMD_CFRAME, OP_HARD_DISCONNECT, 0);
         conn_close(c, DP8_CLOSE_REMOTE);
@@ -446,6 +459,15 @@ static void tick(dp8_ep *ep)
         dp8_conn *c = report[i];
         if (c->ep->cb.closed) c->ep->cb.closed(c->ep->cb.ctx, c, c->closed_reason);
     }
+    /* free connections closed a while ago: reported to the upper layer (which lets go of them in its callback), past
+     * TIME_WAIT, and long enough for a call that picked one up just before to have finished */
+    pthread_mutex_lock(&ep->lock);
+    for (dp8_conn **pp = &ep->conns; *pp; ) {
+        dp8_conn *c = *pp;
+        if (c->state == ST_CLOSED && c->reported && now - c->closed_at > REAP_MS) { *pp = c->next; conn_free_buffers(c); free(c); }
+        else pp = &c->next;
+    }
+    pthread_mutex_unlock(&ep->lock);
 }
 static void *net_thread(void *arg)
 {
@@ -539,5 +561,6 @@ void dp8_close(dp8_ep *ep)
     while (ep->conns) { dp8_conn *c = ep->conns; ep->conns = c->next; conn_free_buffers(c); free(c); }
     while (ep->lagq) { Delayed *d = ep->lagq; ep->lagq = d->next; free(d); }
     while (ep->rxq) { Delayed *d = ep->rxq; ep->rxq = d->next; free(d); }
+    while (ep->pend) { Pend *m = ep->pend; ep->pend = m->next; free(m); }
     pthread_mutex_destroy(&ep->lock); pthread_mutex_destroy(&ep->lagm); free(ep);
 }
