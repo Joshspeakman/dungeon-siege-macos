@@ -89,6 +89,7 @@ static CGRect opaque_bounds(CGImageRef img)
 typedef struct { NSString *value, *label, *note; } Choice;
 @interface DSRow : NSObject
 @property NSString *title; @property NSArray<NSDictionary *> *choices; @property NSInteger index;
+@property (copy) void (^activate)(void);     /* a row that opens something instead of cycling (Mods) */
 @end
 @implementation DSRow @end
 
@@ -105,7 +106,7 @@ static NSFont *cp(CGFloat size, BOOL bold)
 @interface DSLaunchView : NSView
 @property NSArray<DSRow *> *rows; @property NSInteger focus; @property NSInteger hover; @property NSInteger pressed;
 @property NSImage *stone, *plaque, *trim, *wood, *woodHover, *woodDown; @property NSString *note;
-@property (copy) void (^onPlay)(void); @property (copy) void (^onQuit)(void);
+@property (copy) void (^onPlay)(void); @property (copy) void (^onQuit)(void); @property (copy) void (^onChange)(void);
 @end
 
 enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101 };   /* rows: 10*row + 0 (left arrow) / 1 (value) / 2 (right arrow) */
@@ -143,17 +144,22 @@ enum { HIT_NONE = -1, HIT_PLAY = 100, HIT_QUIT = 101 };   /* rows: 10*row + 0 (l
     if (h != p || h == HIT_NONE) return;
     if (h == HIT_PLAY) { if (self.onPlay) self.onPlay(); return; }
     if (h == HIT_QUIT) { if (self.onQuit) self.onQuit(); return; }
-    NSInteger k = h / 10; self.focus = k; [self step:k by:(h % 10 == 0) ? -1 : 1];
+    NSInteger k = h / 10; self.focus = k;
+    if (self.rows[k].activate) { self.rows[k].activate(); self.needsDisplay = YES; return; }
+    [self step:k by:(h % 10 == 0) ? -1 : 1];
 }
 - (void)step:(NSInteger)k by:(NSInteger)dir
 {
     DSRow *r = self.rows[k]; NSInteger n = (NSInteger)r.choices.count;
+    if (r.activate) { r.activate(); self.needsDisplay = YES; return; }
     r.index = (r.index + dir + n) % n; self.needsDisplay = YES;
+    if (self.onChange) self.onChange();
 }
 - (void)keyDown:(NSEvent *)e
 {
     switch (e.keyCode) {
-    case 0x24: case 0x4c: if (self.onPlay) self.onPlay(); return;      /* Return, Enter */
+    case 0x24: case 0x4c: if (self.rows[self.focus].activate) { self.rows[self.focus].activate(); self.needsDisplay = YES; return; }
+              if (self.onPlay) self.onPlay(); return;      /* Return, Enter */
     case 0x35: if (self.onQuit) self.onQuit(); return;                  /* Escape */
     case 0x7e: self.focus = (self.focus + (NSInteger)self.rows.count - 1) % (NSInteger)self.rows.count; self.needsDisplay = YES; return;
     case 0x7d: self.focus = (self.focus + 1) % (NSInteger)self.rows.count; self.needsDisplay = YES; return;
@@ -336,9 +342,145 @@ static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dfl
     for (NSUInteger k = 0; k < c.count; k++) if ([c[k][@"value"] isEqualToString:v ?: @""]) return (NSInteger)k;
     return dflt;
 }
-/* the chosen settings as environment for the runtime (read later at start-up) */
-static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode, NSString *data)
+// ---------------------------------------------------------------- mods
+// Mods are the archives in <data>/mods (.dsres, and .dsmap for maps). Each game mode has its own ticked set, kept in
+// launcher.plist; at launch the ticked ones are linked into the data folder's view of the game folder (<data>/game/
+// Resources and Maps), which the game reads as its own, and the others' links are removed. Real files there are left
+// alone. Known mods have names, authors and defaults in the catalog below (credits: docs/MODS.md).
+@interface DSBlockTarget : NSObject      /* a button action as a block */
+@property (copy) void (^fire)(NSInteger tag);
+- (void)clicked:(NSButton *)b;
+@end
+@implementation DSBlockTarget
+- (void)clicked:(NSButton *)b { if (self.fire) self.fire(b.tag); }
+@end
+enum { MOD_BASE = 1, MOD_LOA = 2 };
+typedef struct { const char *id, *name, *author, *about; int games, on; } ModInfo;
+static const ModInfo mod_catalog[] = {
+    {"yesterhaven", "Yesterhaven", "Gas Powered Games", "Free multiplayer adventure map", MOD_BASE | MOD_LOA, MOD_BASE | MOD_LOA},
+    {"fairyfix", "Fairy Fix", "unknown author", "A small fix used alongside Yesterhaven", MOD_BASE | MOD_LOA, MOD_BASE | MOD_LOA},
+    {"ikkyo_mpsave_beta_6", "Multiplayer Quest Save (beta 6)", "Jason \"Ikkyo\" Gripp", "Keeps multiplayer quest progress between sessions", MOD_BASE | MOD_LOA, MOD_BASE | MOD_LOA},
+    {"sf_resolutionfix", "SeeFar2020 Resolution Fix", "antonior (SeeFar2020, after SeeFar by Jeff Kretz and Irwin Ryan)", "Interface layout for wide resolutions", MOD_BASE | MOD_LOA, MOD_BASE | MOD_LOA},
+    {"uberui_loa_v0.02", "UberUI for Legends of Aranna (0.02)", "unknown author", "Extended character screen", MOD_LOA, MOD_LOA},
+    {"ds1_difficulty_patch", "DS1 Difficulty Patch", "unknown author", "Rebalanced monsters for Legends of Aranna", MOD_LOA, MOD_LOA},
+};
+static NSString *mods_dir(NSString *data) { return [data stringByAppendingPathComponent:@"mods"]; }
+/* the mods present: id -> files; names and defaults from the catalog, else from the file name */
+static NSArray<NSDictionary *> *mods_found(NSString *data)
 {
+    NSMutableDictionary<NSString *, NSMutableArray *> *files = [NSMutableDictionary dictionary];
+    for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:mods_dir(data) error:nil]) {
+        NSString *ext = f.pathExtension.lowercaseString; if (![ext isEqualToString:@"dsres"] && ![ext isEqualToString:@"dsmap"]) continue;
+        NSString *mid = f.stringByDeletingPathExtension.lowercaseString;
+        if (!files[mid]) files[mid] = [NSMutableArray array];
+        [files[mid] addObject:f];
+    }
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *mid in [files.allKeys sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)]) {
+        const ModInfo *m = 0; for (size_t k = 0; k < sizeof mod_catalog / sizeof *mod_catalog; k++) if (!strcmp(mod_catalog[k].id, mid.UTF8String)) m = &mod_catalog[k];
+        [out addObject:@{@"id": mid, @"files": files[mid], @"name": m ? @(m->name) : [files[mid][0] stringByDeletingPathExtension],
+                         @"author": m ? @(m->author) : @"", @"about": m ? @(m->about) : @"",
+                         @"games": @(m ? m->games : MOD_BASE | MOD_LOA), @"on": @(m ? m->on : 0)}];
+    }
+    return out;
+}
+static NSString *mods_key(BOOL loa) { return loa ? @"modsAranna" : @"modsDungeonSiege"; }
+/* the ticked set for a game: as saved, or the defaults (new mods take their default when first seen) */
+static NSMutableSet<NSString *> *mods_enabled(NSDictionary *saved, NSArray<NSDictionary *> *found, BOOL loa)
+{
+    NSArray *list = saved[mods_key(loa)]; NSArray *known = saved[[mods_key(loa) stringByAppendingString:@"Seen"]] ?: @[];
+    NSMutableSet *on = list ? [NSMutableSet setWithArray:list] : [NSMutableSet set];
+    for (NSDictionary *m in found) {
+        if (!([m[@"games"] intValue] & (loa ? MOD_LOA : MOD_BASE))) { [on removeObject:m[@"id"]]; continue; }
+        if ((!list || ![known containsObject:m[@"id"]]) && ([m[@"on"] intValue] & (loa ? MOD_LOA : MOD_BASE))) [on addObject:m[@"id"]];
+    }
+    return on;
+}
+/* the tick list: returns NO if cancelled */
+static BOOL mods_panel(NSWindow *parent, NSString *data, NSArray<NSDictionary *> *found, BOOL loa, NSMutableSet<NSString *> *on)
+{
+    NSPanel *pn = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 560, 120) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+    pn.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]; pn.title = loa ? @"Mods for Legends of Aranna" : @"Mods for Dungeon Siege";
+    NSStackView *st = [NSStackView stackViewWithViews:@[]]; st.orientation = NSUserInterfaceLayoutOrientationVertical; st.alignment = NSLayoutAttributeLeading; st.spacing = 6;
+    st.edgeInsets = NSEdgeInsetsMake(16, 18, 16, 18);
+    NSTextField *hd = [NSTextField wrappingLabelWithString:@"Ticked mods are loaded when this game starts. To play together, everyone needs the same mods. Add others by dropping their .dsres or .dsmap files into the Mods folder."];
+    hd.textColor = NSColor.secondaryLabelColor; hd.preferredMaxLayoutWidth = 520; [st addArrangedSubview:hd];
+    NSMutableArray<NSButton *> *boxes = [NSMutableArray array]; NSMutableArray *ids = [NSMutableArray array];
+    for (NSDictionary *m in found) {
+        if (!([m[@"games"] intValue] & (loa ? MOD_LOA : MOD_BASE))) continue;
+        NSButton *b = [NSButton checkboxWithTitle:m[@"name"] target:nil action:nil]; b.state = [on containsObject:m[@"id"]] ? NSControlStateValueOn : NSControlStateValueOff;
+        b.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        [st addArrangedSubview:b]; [boxes addObject:b]; [ids addObject:m[@"id"]];
+        NSString *sub = [NSString stringWithFormat:@"%@%@%@", [m[@"author"] length] ? m[@"author"] : @"", [m[@"author"] length] && [m[@"about"] length] ? @" — " : @"", m[@"about"]];
+        if (!sub.length) sub = [m[@"files"] componentsJoinedByString:@", "];
+        NSTextField *l = [NSTextField labelWithString:sub]; l.textColor = NSColor.secondaryLabelColor; l.font = [NSFont systemFontOfSize:11];
+        [st addArrangedSubview:l]; [st setCustomSpacing:10 afterView:l];
+        [NSLayoutConstraint activateConstraints:@[[l.leadingAnchor constraintEqualToAnchor:b.leadingAnchor constant:20]]];
+    }
+    if (!boxes.count) { NSTextField *e = [NSTextField labelWithString:@"No mods installed yet."]; [st addArrangedSubview:e]; }
+    __block BOOL ok = NO;
+    NSButton *folder = [NSButton buttonWithTitle:@"Open Mods Folder" target:nil action:nil];
+    NSButton *cancel = [NSButton buttonWithTitle:@"Cancel" target:nil action:nil], *done = [NSButton buttonWithTitle:@"Done" target:nil action:nil];
+    done.keyEquivalent = @"\r"; cancel.keyEquivalent = @"\033";
+    NSStackView *btns = [NSStackView stackViewWithViews:@[folder, [NSView new], cancel, done]]; btns.distribution = NSStackViewDistributionFill;
+    [st addArrangedSubview:btns]; [NSLayoutConstraint activateConstraints:@[[btns.widthAnchor constraintEqualToConstant:524]]];
+    DSBlockTarget *t = [DSBlockTarget new];
+    t.fire = ^(NSInteger tag) {
+        if (tag == 3) { [NSFileManager.defaultManager createDirectoryAtPath:mods_dir(data) withIntermediateDirectories:YES attributes:nil error:nil];
+                        [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:mods_dir(data)]]; return; }
+        ok = tag == 1; [NSApp stopModal];
+    };
+    for (NSButton *b in @[done, cancel, folder]) { b.target = t; b.action = @selector(clicked:); }
+    done.tag = 1; cancel.tag = 2; folder.tag = 3;
+    pn.contentView = st; [pn setContentSize:st.fittingSize];
+    [parent beginSheet:pn completionHandler:nil];
+    [NSApp runModalForWindow:pn];
+    [parent endSheet:pn]; [pn orderOut:nil];
+    if (ok) for (NSUInteger k = 0; k < boxes.count; k++) { if (boxes[k].state == NSControlStateValueOn) [on addObject:ids[k]]; else [on removeObject:ids[k]]; }
+    return ok;
+}
+/* links the ticked mods' files into <data>/game/Resources and Maps and removes the links of the others (DS_MODS: the
+ * ticked files, comma separated; set by the launch window, or by hand for tests) */
+void ds_mods_sync(const char *data_dir)
+{
+    const char *e = getenv("DS_MODS"); if (!e) return;
+    NSString *data = @(data_dir), *mods = mods_dir(data); NSFileManager *fm = NSFileManager.defaultManager;
+    NSSet *want = [NSSet setWithArray:[[@(e) lowercaseString] componentsSeparatedByString:@","]];
+    for (NSString *sub in @[@"Resources", @"Maps"]) {
+        NSString *dir = [[data stringByAppendingPathComponent:@"game"] stringByAppendingPathComponent:sub];
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {          /* our links whose mod is not ticked */
+            NSString *path = [dir stringByAppendingPathComponent:f], *dest = [fm destinationOfSymbolicLinkAtPath:path error:nil];
+            if (dest && [dest hasPrefix:mods] && ![want containsObject:f.lowercaseString]) [fm removeItemAtPath:path error:nil];
+        }
+    }
+    for (NSString *f in [fm contentsOfDirectoryAtPath:mods error:nil]) {
+        if (![want containsObject:f.lowercaseString]) continue;
+        NSString *ext = f.pathExtension.lowercaseString, *sub = [ext isEqualToString:@"dsmap"] ? @"Maps" : [ext isEqualToString:@"dsres"] ? @"Resources" : nil;
+        if (!sub) continue;
+        NSString *link = [[[data stringByAppendingPathComponent:@"game"] stringByAppendingPathComponent:sub] stringByAppendingPathComponent:f];
+        if ([fm fileExistsAtPath:link] || [fm destinationOfSymbolicLinkAtPath:link error:nil]) continue;   /* already there (link or a real copy) */
+        [fm createSymbolicLinkAtPath:link withDestinationPath:[mods stringByAppendingPathComponent:f] error:nil];
+    }
+}
+static NSString *mods_files(NSArray<NSDictionary *> *found, NSSet<NSString *> *on)
+{
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSDictionary *m in found) if ([on containsObject:m[@"id"]]) [a addObjectsFromArray:m[@"files"]];
+    return [a componentsJoinedByString:@","];
+}
+static NSArray<NSDictionary *> *mods_choice(NSArray<NSDictionary *> *found, NSSet<NSString *> *on, BOOL loa)
+{
+    NSMutableArray *names = [NSMutableArray array]; NSInteger avail = 0;
+    for (NSDictionary *m in found) if ([m[@"games"] intValue] & (loa ? MOD_LOA : MOD_BASE)) { avail++; if ([on containsObject:m[@"id"]]) [names addObject:m[@"name"]]; }
+    NSString *label = !avail ? @"None installed" : names.count ? [NSString stringWithFormat:@"%lu of %ld on", (unsigned long)names.count, (long)avail] : @"All off";
+    return @[@{@"value": @"mods", @"label": label, @"note": names.count ? [names componentsJoinedByString:@", "] : @"Click to choose"}];
+}
+
+/* the chosen settings as environment for the runtime (read later at start-up) */
+static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode, NSString *data, NSString *mods)
+{
+    if (!getenv("DS_MODS")) setenv("DS_MODS", mods.UTF8String, 1);    /* the ticked mods' files, linked in at start-up */
     if ([mode hasPrefix:@"loa"] && have_expansion(data)) setenv("DS_EXPANSION", expansion_dir(data).fileSystemRepresentation, 1);
     if ([mode hasSuffix:@"multi"]) {   /* the game's own switch for its multiplayer screens */
         const char *old = getenv("DS_ARGS"); NSString *args = old && *old ? [NSString stringWithFormat:@"%s zonematch=true", old] : @"zonematch=true";
@@ -361,14 +503,25 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], 2);
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
     mode.title = @"Game"; mode.choices = mode_choices(data); mode.index = index_of(mode.choices, saved[@"mode"], 0);
+    NSArray<NSDictionary *> *found = mods_found(data);
+    NSMutableSet *onBase = mods_enabled(saved, found, NO), *onLoa = mods_enabled(saved, found, YES);
+    BOOL (^isLoa)(void) = ^BOOL { return [mode.choices[mode.index][@"value"] hasPrefix:@"loa"]; };
+    DSRow *mods = [DSRow new]; mods.title = @"Mods"; mods.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa());
+    NSString *(^modFiles)(void) = ^NSString * { return mods_files(found, isLoa() ? onLoa : onBase); };
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
-        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data);
+        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data, modFiles());
         return 1;
     }
 
-    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 626)];
-    v.rows = @[mode, res, dist, fps]; v.hover = v.pressed = HIT_NONE;
+    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700)];
+    v.rows = @[mode, mods, res, dist, fps]; v.hover = v.pressed = HIT_NONE;
+    __weak DSLaunchView *wv = v;
+    v.onChange = ^{ mods.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa()); };   /* the Game row decides which set */
+    __weak DSRow *wm = mods;
+    mods.activate = ^{
+        if (mods_panel(wv.window, data, found, isLoa(), isLoa() ? onLoa : onBase)) wm.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa());
+    };
     NSString *tank = [@(game_dir) stringByAppendingPathComponent:@"Resources/Objects.dsres"], *m = @"art/bitmaps/gui/front_end/menus/main/b_gui_fe_m_mn_3d_";
     CGImageRef stone = raw_image(tank_read(tank, [m stringByAppendingString:@"background-05.raw"]));
     CGImageRef bars = raw_image(tank_read(tank, [m stringByAppendingString:@"menubars.raw"]));
@@ -401,7 +554,11 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     [w orderOut:nil];
     if (!result) return 0;
     NSString *rv = res.choices[res.index][@"value"], *dv = dist.choices[dist.index][@"value"], *fv = fps.choices[fps.index][@"value"], *mv = mode.choices[mode.index][@"value"];
-    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv, mv, data);
+    NSMutableArray *seenBase = [NSMutableArray array], *seenLoa = [NSMutableArray array];
+    for (NSDictionary *m in found) { if ([m[@"games"] intValue] & MOD_BASE) [seenBase addObject:m[@"id"]]; if ([m[@"games"] intValue] & MOD_LOA) [seenLoa addObject:m[@"id"]]; }
+    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv,
+       mods_key(NO): onBase.allObjects, mods_key(YES): onLoa.allObjects,
+       [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa} writeToFile:plistPath atomically:YES];
+    apply(rv, dv, fv, mv, data, modFiles());
     return 1;
 }
