@@ -101,6 +101,9 @@ static float4 op(int o, float4 x, float4 y, float4 diffuse, float4 texel, float4
     }
 }
 
+/* Pipelines for draws without alpha testing are built with kAlphaTest false: a shader that can discard keeps the GPU
+ * from removing hidden surfaces before shading (Apple GPUs' HSR) for every draw that uses it. */
+constant bool kAlphaTest [[function_constant(0)]];
 fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]],
                         texture2d<float> t0 [[texture(0)]], sampler s0 [[sampler(0)]],
                         texture2d<float> t1 [[texture(1)]], sampler s1 [[sampler(1)]])
@@ -122,7 +125,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]
             current = float4(c1.rgb, a1.a);
         }
     }
-    if (u.at.z != 0) {                                   // alpha test (D3DCMP_*)
+    if (kAlphaTest && u.at.z != 0) {                     // alpha test (D3DCMP_*)
         float a = current.a, r = u.at.x; int f = int(u.at.y); bool pass;
         switch (f) { case 1: pass = false; break; case 2: pass = a < r; break; case 3: pass = a == r; break; case 4: pass = a <= r; break;
                      case 5: pass = a > r; break; case 6: pass = a != r; break; case 7: pass = a >= r; break; default: pass = true; }
