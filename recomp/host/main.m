@@ -135,7 +135,7 @@ static void parse_script(void)
         if (tok[0] == '@') a->frame = 0xffffffffu;
         if (ok >= 2) {
             snprintf(a->kind, sizeof a->kind, "%s", kind);
-            if (!strcmp(kind, "shot") || !strcmp(kind, "type")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+            if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
             nacts++;
         }
         tok = strtok_r(0, ";", &save);
@@ -160,7 +160,9 @@ static void motion_tick(void)
 /* "type" action: each character as a keyDown/keyUp NSEvent sent to the window; {esc} {enter} {bs} for keys */
 static void type_text(NSString *text);
 /* DS_CMDFILE=<path> (test mode): lines appended to the file while the game runs ("click:400,290", "type:Name",
- * "key:13", "shot:/tmp/a.png", ...) are carried out from the next frame on: for tests driven from outside */
+ * "key:13", "shot:/tmp/a.png", ...) are carried out from the next frame on: for tests driven from outside.
+ * "peek:7a05fc,a8,13" prints game memory: the dword at the first (hex) address, then each further offset added to the
+ * previous value and read again (a pointer chain) */
 static void cmdfile_poll(uint32_t fno)
 {
     static const char *path; static off_t pos; static int init;
@@ -174,7 +176,7 @@ static void cmdfile_poll(uint32_t fno)
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         if (sscanf(line, "%7[a-z]:%599[^\n]", kind, rest) < 1 || !kind[0]) continue;
         memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
-        if (!strcmp(kind, "shot") || !strcmp(kind, "type")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
         nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
     }
     fclose(f);
@@ -202,6 +204,11 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
+        else if (!strcmp(a->kind, "peek") && fno == a->frame) {
+            extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
+            for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }
+            fprintf(stderr, "DungeonSiegeNative: peek %s = 0x%08x (byte 0x%02x)\n", a->path, v, v & 0xff);
+        }
         else if (!strcmp(a->kind, "wheel") && fno >= a->frame && fno < a->frame + (uint32_t)abs(a->x)) post(0x20a, ((uint32_t)(int16_t)(a->x > 0 ? 120 : -120) << 16), pos_lp());   /* x notches */
         else if (!strcmp(a->kind, "type") && fno == a->frame) {   /* real NSEvents through the window (keyboard path) */
             NSString *text = @(a->path);
