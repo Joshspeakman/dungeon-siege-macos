@@ -11,6 +11,10 @@
 #                                      own) found anywhere under <folder> to the Mods list (tick them in the launcher;
 #                                      known ones start ticked). Mods this project may redistribute (mods/) are always
 #                                      added. Credits: docs/MODS.md.
+# install.sh --collection <folder>     everything from one backup folder: the GOG game (offline installer or game
+#                                      folder), Legends of Aranna, Yesterhaven and mods, saves and launcher settings;
+#                                      the game is copied into the data folder, so the backup can be put away again.
+# install.sh --save-collection <folder>  writes that backup folder from this Mac's current setup.
 #
 # Builds the natively recompiled Dungeon Siege from your own copy of the GOG 1.11.1 game and installs
 # "Dungeon Siege Native.app" (no Wine, no Rosetta). The game folder is only read: settings, saves and logs go to the
@@ -18,11 +22,12 @@
 # installs capstone and unicorn with pip into recomp/.venv).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
 while [ $# -gt 0 ]; do
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
     --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;;
+    --collection) COL="$2"; shift 2;; --save-collection) SAVECOL="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
   esac
 done
@@ -70,6 +75,48 @@ expansion() {
   done
   echo "== Legends of Aranna installed in $DATA/expansion: choose it in the launcher's Game row"
 }
+GOG_SHA=41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02
+DOCS="$DATA/drive_c/Users/player/Documents"
+# --save-collection: the game folder, the expansion's archives, the mods, saves and launcher settings, in one folder
+if [ -n "$SAVECOL" ]; then
+  L="$APPS/Dungeon Siege Native.app/Contents/MacOS/launcher"
+  G="$( [ -f "$L" ] && sed -n 's/^GAME="\${DS_GAME_DIR:-\(.*\)}"; DATA=.*/\1/p' "$L" | head -1 || true)"
+  [ -n "$G" ] && [ -f "$G/DungeonSiege.exe" ] || { echo "the installed app's game folder was not found; install first"; exit 1; }
+  mkdir -p "$SAVECOL"; echo "== saving the collection in $SAVECOL"
+  rsync -a "$G/" "$SAVECOL/Dungeon Siege/"
+  [ -d "$DATA/expansion" ] && rsync -a "$DATA/expansion/" "$SAVECOL/Legends of Aranna/"
+  [ -d "$DATA/mods" ] && rsync -a "$DATA/mods/" "$SAVECOL/Mods/"
+  for d in "Dungeon Siege" "Dungeon Siege LOA"; do [ -d "$DOCS/$d" ] && rsync -a "$DOCS/$d/" "$SAVECOL/Saves/$d/"; done
+  [ -f "$DATA/launcher.plist" ] && mkdir -p "$SAVECOL/Settings" && cp "$DATA/launcher.plist" "$SAVECOL/Settings/"
+  cat > "$SAVECOL/README.txt" <<EOF
+Dungeon Siege Native collection, saved $(date '+%Y-%m-%d'). To set up a Mac from it:
+  git clone <this project> && cd dungeon-siege-macos && ./install.sh --collection "/path/to/this folder"
+Contents: the GOG game ("Dungeon Siege"), Legends of Aranna's archives, mods, saves and settings ("Saves",
+"Settings"). Keep it private: it holds your own copies of the games.
+EOF
+  du -sh "$SAVECOL" | sed 's/^/== collection size: /'
+  exit 0
+fi
+# --collection: find everything in the backup folder
+if [ -n "$COL" ]; then
+  [ -d "$COL" ] || { echo "no such folder: $COL"; exit 1; }
+  inst="$(find "$COL" -maxdepth 3 -iname 'setup_dungeon_siege*.exe' -print -quit 2>/dev/null)"
+  exe=""; while IFS= read -r -d '' f; do [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$GOG_SHA" ] && { exe="$f"; break; }; done \
+    < <(find "$COL" -maxdepth 4 -iname 'DungeonSiege.exe*' -type f -print0 2>/dev/null)
+  if [ -n "$exe" ]; then         # a game folder: copied into the data folder, so the app does not depend on the backup
+    mkdir -p "$DATA"; echo "== copying the game from $(dirname "$exe") into $DATA/gog-game"
+    rsync -a --exclude 'DungeonSiege.exe.*' "$(dirname "$exe")/" "$DATA/gog-game/"
+    [ -f "$DATA/gog-game/DungeonSiege.exe" ] && [ "$(shasum -a 256 "$DATA/gog-game/DungeonSiege.exe" | cut -d' ' -f1)" = "$GOG_SHA" ] || cp "$exe" "$DATA/gog-game/DungeonSiege.exe"
+    GAME="$DATA/gog-game"
+  elif [ -n "$inst" ]; then GOG_EXE="$inst"
+  else echo "no GOG Dungeon Siege 1.11.1 (offline installer or game folder) found in $COL"; exit 1; fi
+  [ -n "$(find "$COL" -maxdepth 4 -iname Expansion.dsres -print -quit 2>/dev/null)" ] && LOA="$COL"   # its archives are found by name
+  MODS="$COL"
+  for d in "Dungeon Siege" "Dungeon Siege LOA"; do      # saves and settings, unless this Mac already has its own
+    if [ -d "$COL/Saves/$d" ] && [ ! -d "$DOCS/$d" ]; then mkdir -p "$DOCS"; rsync -a "$COL/Saves/$d/" "$DOCS/$d/"; echo "== restored $d saves and settings"; fi
+  done
+  if [ -f "$COL/Settings/launcher.plist" ] && [ ! -f "$DATA/launcher.plist" ]; then mkdir -p "$DATA"; cp "$COL/Settings/launcher.plist" "$DATA/"; fi
+fi
 if [ -n "$YH$LOA$MODS" ]; then
   [ -z "$YH" ] || yesterhaven
   [ -z "$LOA" ] || expansion
