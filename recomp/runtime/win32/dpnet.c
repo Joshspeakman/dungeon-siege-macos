@@ -218,6 +218,8 @@ typedef struct Sess {
     EnumOp en[8]; int enum_thread;
 } Sess;
 static Sess *sess_of(Obj *o) { return o ? (Sess *)(uintptr_t)o->context_sess : 0; }
+/* the session this Mac hosts / has joined (sessions are never freed), for dpnet_host_max_rtt / dpnet_client_rtt */
+static Sess *g_hosting, *g_joined;
 
 /* ---- byte buffers for wire messages ---- */
 typedef struct Buf { uint8_t *p; size_t n, cap; } Buf;
@@ -936,7 +938,7 @@ static void cl_Connect(Ctx *c)
     s->connecting = 1; s->connected = 0; s->conn_handle = next_handle(); s->conn_ctx = uctx; s->in_connect_call = !(fl & DPNCONNECT_SYNC);
     if (ph) rt_w32(G_MEM, ph, s->conn_handle);
     LOG("client: connecting to %s:%u\n", h, ntohs(to.sin_port));
-    s->srv = dp8_connect(s->ep, &to);
+    s->srv = dp8_connect(s->ep, &to); g_joined = s;
     if (fl & DPNCONNECT_SYNC) {
         while (s->connecting) pthread_cond_wait(&s->conn_cv, &s->m);
         uint32_t hr = s->conn_hr; pthread_mutex_unlock(&s->m); RET(hr, 11);
@@ -1063,6 +1065,20 @@ static void sv_SetApplicationDesc(Ctx *c)
     send_app_desc_update(s); pthread_mutex_unlock(&s->m);
     RET(S_OK_, 3);
 }
+/* the network round trip (ms) to the host of the game this Mac has joined; -1 when not in one */
+int dpnet_client_rtt(void)
+{
+    Sess *s = g_joined; if (!s) return -1;
+    pthread_mutex_lock(&s->m); int r = !s->server && s->srv && s->connected ? (int)dp8_rtt(s->srv) : -1; pthread_mutex_unlock(&s->m); return r;
+}
+/* the largest network round trip (ms) to the players in the game this Mac hosts; -1 when not hosting or alone */
+int dpnet_host_max_rtt(void)
+{
+    Sess *s = g_hosting; if (!s) return -1;
+    int best = -1; pthread_mutex_lock(&s->m);
+    if (s->hosting) for (int i = 0; i < 256; i++) if (s->pl[i].used && s->pl[i].created && s->pl[i].conn) { int r = (int)dp8_rtt(s->pl[i].conn); if (r > best) best = r; }
+    pthread_mutex_unlock(&s->m); return best;
+}
 static void sv_Host(Ctx *c)
 {
     dump_args("Host", c, 8);
@@ -1072,7 +1088,7 @@ static void sv_Host(Ctx *c)
     read_app_desc(s, ad); static const uint8_t zero[16]; if (!memcmp(s->instance, zero, 16)) arc4random_buf(s->instance, 16);
     uint16_t port = 0; if (ndev && devs) port = (uint16_t)addr_port(O(rt_r32(G_MEM, devs)));
     if (ensure_endpoint(s, 1, port)) { pthread_mutex_unlock(&s->m); LOG("server: no UDP port available\n"); RET(DPNERR_GENERIC, 8); }
-    s->hosting = 1; s->ntver = 1; s->server_dpnid = make_dpnid(s, 0); s->server_ctx = pctx;
+    s->hosting = 1; g_hosting = s; s->ntver = 1; s->server_dpnid = make_dpnid(s, 0); s->server_ctx = pctx;
     LOG("server: hosting on UDP %u (enumeration port %s)\n", dp8_port(s->ep), dp8_enum_port_bound(s->ep) ? "6073" : "unavailable");
     { void portmap_open(uint16_t, uint16_t); portmap_open(dp8_port(s->ep), dp8_enum_port_bound(s->ep) ? DP8_ENUM_PORT : 0); }   /* internet players */
     pthread_mutex_unlock(&s->m);
@@ -1151,7 +1167,13 @@ static void sv_GetConnectionInfo(Ctx *c)
 /* GetSendQueueInfo: messages not yet acknowledged; the byte count is not tracked */
 static void queue_info(Ctx *c, dp8_conn *conn, uint32_t pmsgs, uint32_t pbytes, int nargs)
 {
-    if (pmsgs) rt_w32(G_MEM, pmsgs, conn ? (uint32_t)dp8_pending(conn) : 0);
+    uint32_t n = conn ? (uint32_t)dp8_pending(conn) : 0;
+    if (getenv("DP8_STATS")) {                                   /* how often the game asks, and what it hears */
+        static uint64_t t0; static unsigned calls, nonzero, maxn; uint64_t t = now_us(); if (!t0) t0 = t;
+        calls++; if (n) nonzero++; if (n > maxn) maxn = n;
+        if (t - t0 >= 5000000) { fprintf(stderr, "dpnet: send queue asked %u times in 5 s, non-empty %u times, at most %u\n", calls, nonzero, maxn); t0 = t; calls = nonzero = maxn = 0; }
+    }
+    if (pmsgs) rt_w32(G_MEM, pmsgs, n);
     if (pbytes) rt_w32(G_MEM, pbytes, 0);
     RET(S_OK_, nargs);
 }
@@ -1170,7 +1192,7 @@ static void cs_Close(Ctx *c)
     for (int i = 0; i < 8; i++) if (s->en[i].used) enum_end(&s->en[i]);
     if (s->server && s->hosting) {
         for (int i = 0; i < 256; i++) if (s->pl[i].used && s->pl[i].conn) { send_terminate(s->pl[i].conn, 0); dp8_disconnect(s->pl[i].conn, 0); s->pl[i].leaving = 1; }
-        s->hosting = 0;
+        s->hosting = 0; if (g_hosting == s) g_hosting = 0;
         void portmap_close(void); pthread_mutex_unlock(&s->m); portmap_close(); pthread_mutex_lock(&s->m);
     }
     if (!s->server && s->srv) { dp8_disconnect(s->srv, 0); s->connected = 0; }
