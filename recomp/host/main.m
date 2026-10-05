@@ -360,6 +360,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
         if (test_mode) { f = NSMakeRect(80, 80, 960, 620); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }
         win = [[GameWindow alloc] initWithContentRect:f styleMask:sm backing:NSBackingStoreBuffered defer:NO];
+        win.releasedWhenClosed = NO;   /* ARC owns it (AppKit's default releases a closed window once more) */
         f.origin = NSZeroPoint;
         win.title = @"Dungeon Siege"; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
         GameView *v = [[GameView alloc] initWithFrame:f]; v.wantsLayer = YES;
