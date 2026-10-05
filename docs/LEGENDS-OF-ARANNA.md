@@ -26,8 +26,15 @@ three archives, plus the two multiplayer ones if present, from wherever they are
 | `Expansion.dsmap` | the Aranna campaign map |
 | `XPRes.dsres`, `XPMap.dsmap` | the expansion's multiplayer map (optional) |
 
-They go to `~/Games/DungeonSiegeNative/expansion`; other `.dsres` files in the same folder (mods) are left out, and your
-Dungeon Siege game folder is not changed. This works on its own or together with `--game-dir`/`--gog-installer`.
+They go to `~/Games/DungeonSiegeNative/expansion`, and your Dungeon Siege game folder is not changed. This works on its
+own or together with `--game-dir`/`--gog-installer`. Mods found in the same folder (UberUI, the Difficulty Patch,
+Yesterhaven and so on) are added to the launcher's Mods list with `--mods`:
+
+```sh
+./install.sh --expansion "/path/to/Legends of Aranna" --mods "/path/to/Legends of Aranna"
+```
+
+See [MODS.md](MODS.md) for choosing them and for their authors.
 
 ## Playing
 

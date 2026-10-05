@@ -510,6 +510,7 @@ int main(int argc, char **argv)
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
                 if (!ds_launcher_run(game, data)) return 0;
             }
+            void ds_mods_sync(const char *data_dir); ds_mods_sync(data);   /* the ticked mods into the game's folders */
         }
         {   /* draw distance in percent of the original (the launch window sets it); hides an installed SeeFar mod */
             extern float w32_draw_distance; extern int w32_hide_seefar; const char *dd = getenv("DS_DRAW_DISTANCE");

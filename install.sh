@@ -7,6 +7,10 @@
 #                                      ExpVoices.dsres, plus XPRes.dsres/XPMap.dsmap if present, found anywhere under
 #                                      <folder>, e.g. the installed game's DSLOA folder or the disc); only the data is
 #                                      used, never DSLOA.exe. Choose "Legends of Aranna" in the launcher.
+# install.sh --mods <folder>           adds every mod archive (.dsres/.dsmap that is not the game's or the expansion's
+#                                      own) found anywhere under <folder> to the Mods list (tick them in the launcher;
+#                                      known ones start ticked). Mods this project may redistribute (mods/) are always
+#                                      added. Credits: docs/MODS.md.
 #
 # Builds the natively recompiled Dungeon Siege from your own copy of the GOG 1.11.1 game and installs
 # "Dungeon Siege Native.app" (no Wine, no Rosetta). The game folder is only read: settings, saves and logs go to the
@@ -14,26 +18,43 @@
 # installs capstone and unicorn with pip into recomp/.venv).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GAME=""; GOG_EXE=""; YH=""; LOA=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
 while [ $# -gt 0 ]; do
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
-    --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;;
+    --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
   esac
 done
-# Yesterhaven: the map and its resources go to the data folder's overlay of the game folder (<data>/game), which the
-# game sees as its own Maps and Resources folders; the game folder itself is not touched
+# Yesterhaven: the map and its resources go to the Mods list (<data>/mods; ticked by default, for both games); the
+# launcher links ticked mods into the data folder's view of the game folder, which the game sees as its own Maps and
+# Resources folders. The game folder itself is not touched.
 yesterhaven() {
   local m r; m="$(find "$YH" -iname Yesterhaven.dsmap -print -quit 2>/dev/null)"; r="$(find "$YH" -iname Yesterhaven.dsres -print -quit 2>/dev/null)"
   [ -n "$m" ] && [ -n "$r" ] || { echo "Yesterhaven.dsmap and Yesterhaven.dsres not found under $YH"; exit 1; }
   for f in "$m" "$r"; do   # Dungeon Siege archives ("DSigTank") made for Yesterhaven
     [ "$(head -c 8 "$f")" = DSigTank ] && head -c 4096 "$f" | LC_ALL=C tr -d '\000' | LC_ALL=C grep -a Yesterhaven >/dev/null || { echo "$f is not a Yesterhaven archive"; exit 1; }
   done
-  mkdir -p "$DATA/game/Maps" "$DATA/game/Resources"
-  cp "$m" "$DATA/game/Maps/Yesterhaven.dsmap"; cp "$r" "$DATA/game/Resources/Yesterhaven.dsres"
-  echo "== Yesterhaven installed in $DATA/game: host a multiplayer game and choose it under Map Settings"
+  mkdir -p "$DATA/mods"
+  cp "$m" "$DATA/mods/Yesterhaven.dsmap"; cp "$r" "$DATA/mods/Yesterhaven.dsres"
+  echo "== Yesterhaven added to the Mods list: host a multiplayer game and choose it under Map Settings"
 }
+# Mods: every Dungeon Siege archive under the folder that is not part of the game or the expansion goes to <data>/mods
+# (the launcher's Mods list); the project's own redistributable mods (mods/ in this repository) too
+mods() {
+  local src="$1" f n count=0; mkdir -p "$DATA/mods"
+  while IFS= read -r -d '' f; do
+    n="$(basename "$f")"
+    case "$(printf %s "$n" | tr '[:upper:]' '[:lower:]')" in
+      logic.dsres|objects.dsres|terrain.dsres|sound.dsres|voices.dsres|devlogic.dsres|world.dsmap|mpworld.dsmap) continue;;
+      expansion.dsres|expansion.dsmap|expvoices.dsres|xpres.dsres|xpmap.dsmap) continue;;
+    esac
+    [ "$(head -c 8 "$f")" = DSigTank ] || continue
+    cp "$f" "$DATA/mods/$n"; echo "   mod: $n"; count=$((count + 1))
+  done < <(find "$src" \( -iname '*.dsres' -o -iname '*.dsmap' \) -type f -print0 2>/dev/null)
+  echo "== $count mod archive(s) from $src added to the Mods list (tick them in the launcher)"
+}
+bundled_mods() { [ -d "$HERE/mods" ] && find "$HERE/mods" -iname '*.dsres' -o -iname '*.dsmap' | grep -q . && mods "$HERE/mods" >/dev/null && echo "== the project's bundled mods added to the Mods list" || true; }
 # Legends of Aranna: its archives go to <data>/expansion, a read-only layer the game sees over its own folder when the
 # expansion is chosen in the launcher (other .dsres files next to them, such as mods, are left out)
 expansion() {
@@ -49,9 +70,11 @@ expansion() {
   done
   echo "== Legends of Aranna installed in $DATA/expansion: choose it in the launcher's Game row"
 }
-if [ -n "$YH$LOA" ]; then
+if [ -n "$YH$LOA$MODS" ]; then
   [ -z "$YH" ] || yesterhaven
   [ -z "$LOA" ] || expansion
+  [ -z "$MODS" ] || mods "$MODS"
+  bundled_mods
   [ -n "$GAME$GOG_EXE" ] || exit 0
 fi
 if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; the app reads the game from there
@@ -113,4 +136,5 @@ fi
 rm -rf "$I"
 codesign --force --deep --sign - "$A" >/dev/null 2>&1 || true
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$A" 2>/dev/null || true
+bundled_mods
 echo "== done: $A (data in $DATA)"
