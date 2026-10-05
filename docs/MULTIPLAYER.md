@@ -75,13 +75,35 @@ They are copied into the app's data folder (`~/Games/DungeonSiegeNative/game`), 
 `Maps` and `Resources` folders; your game folder is not changed. The host picks **Yesterhaven** under **Map Settings**
 in the staging area. Every player needs the files, Windows players in their game's `Maps` and `Resources` folders.
 
+## Security
+
+Dungeon Siege's network protocol (DirectPlay 8, 2002) has no encryption or authentication. Anyone who can reach a host
+can send it packets, and someone on the path between two players can read or alter their traffic. The app's
+implementation is hardened against malformed and hostile packets:
+
+- Players can only join through the game's own accept step, which includes the session password.
+- Connection floods and oversized messages are capped.
+- Crafted replies to a game search are rejected.
+
+`recomp/tests/dp8fuzz.c` throws random and hostile traffic at it.
+
+The protocol's own limits can't be closed without breaking play with Windows and Linux players: packets can be
+forged by someone who can see the traffic, and a session's identity is chosen by whoever connects.
+
+- For games over the internet, a virtual network such as Tailscale or ZeroTier keeps the game's ports closed to
+  everyone else.
+- To host without asking the router to open ports, start the app with `DS_NO_PORTMAP=1`.
+- Port forwarding is removed when the game ends normally. If the app is force-quit, some routers keep it until
+  they restart.
+
 ## How it works
 
 `recomp/runtime/win32/dpnet.c` provides the DirectPlay 8 objects the game uses (`IDirectPlay8Client`, `…Server`,
 `…Address`) and the client/server session protocol ([MC-DPL8CS]); `dp8proto.c` the reliable transport over UDP
 ([MC-DPL8R]: sequencing, acknowledgements, retransmission, keep-alives, coalesced frames) and host enumeration
 ([MC-DPLHP]). `recomp/tests/dp8test.c` checks the transport against the example packets in the specifications and runs
-a session over loopback with simulated packet loss.
+a session over loopback with simulated packet loss. `recomp/tests/dp8fuzz.c` is a sanitizer fuzz test of the same transport (see
+*Security*).
 
 ## Status
 

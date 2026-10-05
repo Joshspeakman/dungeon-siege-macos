@@ -9,7 +9,7 @@
 #define DSR_SHM_MAGIC   0x31525344u   /* "DSR1" */
 #define DSR_RING_SIZE   (64u << 20)
 #define DSR_HEADER_SIZE 16384u        /* keeps the ring and readback area 16 KB (arm64 page) aligned */
-#define DSR_READBACK_SIZE (16u << 20)  /* GPU->CPU readbacks (Lock of a rendered surface) land here */
+#define DSR_READBACK_SIZE (64u << 20)  /* GPU->CPU readbacks (Lock of a rendered surface) land here: a full screen at 4K and more */
 #define DSR_READBACK_OFFSET (DSR_HEADER_SIZE + DSR_RING_SIZE)
 #define DSR_SHM_SIZE    (DSR_HEADER_SIZE + DSR_RING_SIZE + DSR_READBACK_SIZE)
 #define DSR_WRAP        0xffffu       /* record op: skip to the start of the ring */
