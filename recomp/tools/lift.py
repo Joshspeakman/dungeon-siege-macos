@@ -35,6 +35,7 @@ JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd',
 # instruction the runtime may perform the whole call (including the return) itself.
 OVERRIDES = {
     0x005338e9: 'Quat::RotateVector (native, runtime/win32/native.c)',
+    0x00694970: 'Quat slerp (native, runtime/win32/native.c)',
     0x005d2679: 'GoMind::RSDoJob (mpfeel: a joiner\'s orders)',
     0x005fbb3c: 'GoFollower::Update (mpfeel: playback on joiners)',
     0x005faf98: 'GoFollower: one plan update unpacked (mpfeel)',

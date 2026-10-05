@@ -116,7 +116,7 @@ int rt_override(Ctx *c, uint32_t addr)
         ext_thiscall(c, 0x53e6bau, rt_r32(G_MEM, 0x7a05c8u), 0, 0);        /* what the original does after a change */
         c->ebx = ebx; c->esi = esi; c->edi = edi; c->ebp = ebp; c->esp += 4; return 1;
     }
-    if (addr == 0x5338e9u) { int native_override(Ctx *, uint32_t); if (native_override(c, addr)) return 1; }   /* native maths */
+    if (addr == 0x5338e9u || addr == 0x694970u) { int native_override(Ctx *, uint32_t); if (native_override(c, addr)) return 1; }   /* native maths */
     if (addr == 0x5d2679u || addr == 0x5fbb3cu || addr == 0x5faf98u || addr == 0x574789u || addr == 0x5d281fu || addr == 0x5fae2eu || addr == 0x565464u || addr == 0x57470du) { int mpfeel_override(Ctx *, uint32_t); if (mpfeel_override(c, addr)) return 1; }   /* multiplayer feel */
     if (addr == 0x412d12u) return loa_override(c, addr);       /* DS_REPORTLOG: the engine's reports, in any game */
     return loa_active ? loa_override(c, addr) : 0;
