@@ -118,6 +118,9 @@ int rt_override(Ctx *c, uint32_t addr)
     }
     if (addr == 0x5338e9u || addr == 0x694970u) { int native_override(Ctx *, uint32_t); if (native_override(c, addr)) return 1; }   /* native maths */
     if (addr == 0x5d2679u || addr == 0x5fbb3cu || addr == 0x5faf98u || addr == 0x574789u || addr == 0x5d281fu || addr == 0x5fae2eu || addr == 0x565464u || addr == 0x57470du) { int mpfeel_override(Ctx *, uint32_t); if (mpfeel_override(c, addr)) return 1; }   /* multiplayer feel */
+    if (addr == 0x435d1du) {                      /* a module's PE checksum and file crc (cdecl: &checksum, &crc, path) */
+        int edition_identity(Ctx *, uint32_t); return edition_identity(c, addr);
+    }
     if (addr == 0x42cda8u) {                      /* DS_REPORTLOG: the engine's warnings/asserts formatter (fmt, ...) */
         if (!getenv("DS_REPORTLOG")) return 0;
         uint32_t f = ARG(0); const char *fmt = f ? (const char *)GP(f) : ""; char out[2048]; size_t o = 0; int ai = 1;
