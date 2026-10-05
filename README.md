@@ -13,6 +13,8 @@ git clone https://github.com/Joshspeakman/dungeon-siege-macos.git && cd dungeon-
 open ~/Applications/"Dungeon Siege Native.app"
 ```
 
+For the newest experimental work as a second app, **Dungeon Siege Nightly**: `./install.sh --nightly`.
+
 **Full instructions: [docs/INSTALL.md](docs/INSTALL.md)**: requirements, installing, playing, settings, updating and
 troubleshooting.
 
