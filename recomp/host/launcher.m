@@ -4,6 +4,7 @@
 // stone wall, leather plaque, brass trim and wooden buttons) and set in Copperplate, the typeface of the game's UI.
 // Nothing from the game is stored in this project; without the archive the window falls back to plain colours.
 #import <AppKit/AppKit.h>
+#import <Metal/Metal.h>
 #include <zlib.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -291,6 +292,13 @@ static NSArray<NSDictionary *> *distance_choices(void)
              @{@"value": @"250", @"label": @"Horizon", @"note": @"250%; heavier on large outdoor areas"},
              @{@"value": @"300", @"label": @"Maximum", @"note": @"300%; may slow down in the biggest vistas"}];
 }
+/* the view distance to start with: Farther (150%) everywhere; Very Far (200%) on the big-GPU chips (Max and Ultra, with
+ * 2-4 times the GPU of the M1 Pro it was measured on), so a more powerful Mac starts higher; a saved choice wins */
+static NSInteger default_distance_index(void)
+{
+    NSString *gpu = MTLCreateSystemDefaultDevice().name ?: @"";
+    return [gpu containsString:@" Max"] || [gpu containsString:@" Ultra"] ? 3 : 2;
+}
 static NSArray<NSDictionary *> *framerate_choices(void)
 {
     NSInteger hz = NSScreen.mainScreen.maximumFramesPerSecond; if (hz <= 0) hz = 60;
@@ -500,7 +508,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
     DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new], *mode = [DSRow new];
     res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
-    dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], 2);
+    dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], default_distance_index());
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
     mode.title = @"Game"; mode.choices = mode_choices(data); mode.index = index_of(mode.choices, saved[@"mode"], 0);
     NSArray<NSDictionary *> *found = mods_found(data);

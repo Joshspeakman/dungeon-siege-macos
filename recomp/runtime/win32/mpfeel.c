@@ -117,8 +117,19 @@ static int feel_impl(Ctx *c, uint32_t addr)
     }
     if (addr == FOLLOWER_UNPACK) {                          /* GoFollower: one unpacked plan update (ARG 0; +8 its time) */
         uint32_t go = rt_r32(G_MEM, c->ecx + 4), u = ARG(0); int k = own_slot(go);
-        if (k < 0 || !(rt_r8(G_MEM, u) & 1)) return 0;                                 /* own heroes' timed segments */
+        if (!(rt_r8(G_MEM, u) & 1)) return 0;                                            /* timed waypoints only */
         double lead = rd(u + 8) - joiner_clock();
+        if (feel_on() && is_joiner(c)) {                    /* late waypoints snap: how often, by how much (every 10 s) */
+            static uint64_t t0; static int n, late, nown_, lown; static double worst, worst_own; uint64_t t = now_us(); if (!t0) t0 = t;
+            double eff = k >= 0 ? lead - own_adv[k] : lead;
+            if (k >= 0) { nown_++; if (eff < 0) { lown++; if (-eff > worst_own) worst_own = -eff; } }
+            else { n++; if (eff < 0) { late++; if (-eff > worst) worst = -eff; } }
+            if (t - t0 >= 10000000) {
+                fprintf(stderr, "mpfeel: waypoints in 10 s: others %d (late %d, worst %.0f ms), own heroes %d (late %d, worst %.0f ms)\n", n, late, worst * 1000, nown_, lown, worst_own * 1000);
+                t0 = t; n = late = nown_ = lown = 0; worst = worst_own = 0;
+            }
+        }
+        if (k < 0) return 0;
         if (rt_r32(G_MEM, c->ecx + 0x54) == 0) own_adv[k] = lead < 0 ? 0 : lead > 0.5 ? 0.5 : lead;   /* standing still */
         if (probe.armed && !probe.seg && go == probe.go) { probe.seg = 1; probe.t_seg = now_us(); probe.lead = lead; }
         return 0;
