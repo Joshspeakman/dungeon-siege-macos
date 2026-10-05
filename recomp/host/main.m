@@ -199,6 +199,9 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
             if (fno == a->frame + 20) post(r ? 0x204 : 0x201, r ? 2 : 1, 0);
             if (fno == a->frame + 24) post(r ? 0x205 : 0x202, 0, 0);
+        } else if (!strcmp(a->kind, "press")) {           /* press:x,y: the left button pressed and held (until a later click) */
+            if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
+            if (fno == a->frame + 20) post(0x201, 1, 0);
         } else if (!strcmp(a->kind, "move") && fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
         else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno < a->frame + 60) rel_motion(a->x / 60.0, a->y / 60.0);   /* x,y over 60 frames, like a trackpad swipe */
         else if (!strcmp(a->kind, "key")) {

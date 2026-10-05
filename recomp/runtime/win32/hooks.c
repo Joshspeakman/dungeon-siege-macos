@@ -134,6 +134,31 @@ int rt_override(Ctx *c, uint32_t addr)
         }
         out[o] = 0; fprintf(stderr, "warning: %s\n", out); return 0;
     }
+    if (addr == 0x517017u) {                      /* the inventory paper doll's camera for the screen size (thiscall, no arguments) */
+        /* ui/config/paperdoll_positions lists the doll's screen position (x, y), distance and offsets per resolution; the
+         * game takes the entry whose width and height match the screen exactly and otherwise keeps what it had (the
+         * 640x480 values at first), which leaves the doll outside its box at the window sizes a Mac uses. Without an
+         * exact entry the values are worked out from the screen size: the doll's box is fixed in pixels and the stock and
+         * ResolutionFix-mod entries all follow these within a few pixels (horizontal FOV fixed, so the size goes with the
+         * width). An exact entry is used as before (the last one, as in the original loop). */
+        uint32_t me = c->ecx, scr = rt_r32(G_MEM, 0x79cf74u);
+        if (me && scr) {
+            int32_t w = (int32_t)(rt_r32(G_MEM, scr + 0xc8u) - rt_r32(G_MEM, scr + 0xc0u)), h = (int32_t)(rt_r32(G_MEM, scr + 0xccu) - rt_r32(G_MEM, scr + 0xc4u));
+            float v[6]; int found = 0;                  /* x, y, x_dockbar_offset, y_dockbar_offset, distance, store_offset */
+            uint32_t e = rt_r32(G_MEM, me + 0x9cu), end = rt_r32(G_MEM, me + 0xa0u);
+            for (int k = 0; e && e != end && k < 256; e += 0x20u, k++) {
+                float ew, eh; memcpy(&ew, G_MEM + e + 0x14u, 4); memcpy(&eh, G_MEM + e + 0x18u, 4);
+                if (ew != (float)w || eh != (float)h) continue;
+                memcpy(&v[0], G_MEM + e, 8); memcpy(&v[2], G_MEM + e + 0x0cu, 8); memcpy(&v[4], G_MEM + e + 0x08u, 4); memcpy(&v[5], G_MEM + e + 0x1cu, 4); found = 1;
+            }
+            if (!found && w >= 320 && h >= 240) {
+                v[0] = -1.1547f + 440.0f / (float)w; v[1] = 1.0f - 840.0f / (float)h;
+                v[2] = 0; v[3] = -54.0f / (float)h; v[4] = 9.0f * (float)w / 1024.0f; v[5] = 0.1f; found = 1;
+            }
+            if (found) memcpy(G_MEM + me + 0xa8u, v, sizeof v);   /* +0xa8 x, +0xac y, +0xb0/+0xb4 dockbar offsets, +0xb8 distance, +0xbc store */
+        }
+        c->esp += 4; return 1;
+    }
     if (addr == 0x412d12u) return loa_override(c, addr);       /* DS_REPORTLOG: the engine's reports, in any game */
     return loa_active ? loa_override(c, addr) : 0;
 }
