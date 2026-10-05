@@ -5,10 +5,11 @@
  * when the host's movement plan comes back and its start time arrives on the joiner's clock (GoFollower playback).
  *
  * Own heroes play the host's plans as they arrive: the host schedules each plan a little ahead (its "planner lag", from
- * the latency it measured, up to half a second), and a joiner otherwise waits for that start time on its own clock. The
- * heroes this machine gives orders to are played on a clock advanced by that lead (the smallest lead of the last few
- * orders, so a plan is practically never late), which shows them moving as soon as the host's plan is here; everything
- * else plays as before. DS_NO_OWN_LEAD=1 turns it off.
+ * the latency it measured, up to half a second, and it varies), and a joiner otherwise waits for that start time on its
+ * own clock. Each hero this machine gives orders to is played on its own clock, advanced by the lead of the plan that
+ * started it moving: when a plan arrives for a hero standing still (nothing queued), its advance becomes that plan's
+ * lead, so it starts at once (a standing hero can't visibly jump); while it moves the advance stays. Everything else
+ * plays as before. DS_NO_OWN_LEAD=1 turns it off.
  *
  * When this Mac hosts, the planner's lead comes from the network's real round trip. The game takes it from its own ping
  * of each player, which also counts how long that player's game takes to send its reply (some 250 ms more with a
@@ -50,15 +51,9 @@ static int go_pos(Ctx *c, uint32_t go, float p[3], uint32_t *node)
 static double rd(uint32_t a) { double d; uint64_t v = (uint64_t)rt_r32(G_MEM, a) | (uint64_t)rt_r32(G_MEM, a + 4) << 32; memcpy(&d, &v, 8); return d; }
 static double joiner_clock(void) { uint32_t wt = rt_r32(G_MEM, 0x7a05ccu); return wt ? rd(wt + 0x10) : 0; }   /* WorldTime: seconds */
 /* own heroes and the lead they are played with */
-static uint32_t own[16]; static int nown;
-static double leads[5]; static int nlead; static double own_lead;
-static int is_own(uint32_t go) { for (int k = 0; k < nown; k++) if (own[k] == go) return 1; return 0; }
-static void note_lead(double lead)
-{
-    leads[nlead++ % 5] = lead;
-    double m = 1e9; int n = nlead < 5 ? nlead : 5; for (int k = 0; k < n; k++) if (leads[k] < m) m = leads[k];
-    own_lead = m < 0 ? 0 : m > 0.35 ? 0.35 : m;
-}
+static uint32_t own[16]; static double own_adv[16]; static int nown;
+static int own_slot(uint32_t go) { for (int k = 0; k < nown; k++) if (own[k] == go) return k; return -1; }
+static int is_own(uint32_t go) { return own_slot(go) >= 0; }
 static double clock_pending;                                /* seconds the joiner's clock still has to move */
 static int clock_on(void) { static int on = -1; if (on < 0) on = !getenv("DS_GAME_CLOCK"); return on; }
 static int lead_on(void) { static int on = -1; if (on < 0) on = !getenv("DS_NO_OWN_LEAD"); return on; }
@@ -70,9 +65,9 @@ static int feel_impl(Ctx *c, uint32_t addr)
     if (addr == RSDOJOB) {                                  /* GoMind::RSDoJob(const JobReq&): ecx = the mind */
         if (!is_joiner(c)) return 0;
         uint32_t go = rt_r32(G_MEM, c->ecx + 4), req = ARG(0);
-        if (go && !is_own(go)) { if (nown < 16) own[nown++] = go; else own[go % 16] = go; }
+        if (go && !is_own(go)) { int k = nown < 16 ? nown++ : (int)(go % 16); own[k] = go; own_adv[k] = 0; }
+        if (!feel_on()) return 0;
         probe.go = go; probe.seg = 0; probe.t0 = now_us();
-        if (!feel_on()) { probe.armed = 1; return 0; }
         probe.armed = go_pos(c, go, probe.p, &probe.node); probe.job = req ? rt_r32(G_MEM, req) : 0;
         fprintf(stderr, "mpfeel: order (job %u)%s\n", probe.job, probe.armed ? "" : ": no position, not measured");
         return 0;
@@ -121,19 +116,21 @@ static int feel_impl(Ctx *c, uint32_t addr)
         return 0;
     }
     if (addr == FOLLOWER_UNPACK) {                          /* GoFollower: one unpacked plan update (ARG 0; +8 its time) */
-        if (!probe.armed || probe.seg || rt_r32(G_MEM, c->ecx + 4) != probe.go) return 0;
-        uint32_t u = ARG(0); if (!(rt_r8(G_MEM, u) & 1)) return 0;                     /* a timed segment */
-        probe.seg = 1; probe.t_seg = now_us(); probe.lead = rd(u + 8) - joiner_clock(); note_lead(probe.lead);
-        if (!feel_on()) probe.armed = 0;
+        uint32_t go = rt_r32(G_MEM, c->ecx + 4), u = ARG(0); int k = own_slot(go);
+        if (k < 0 || !(rt_r8(G_MEM, u) & 1)) return 0;                                 /* own heroes' timed segments */
+        double lead = rd(u + 8) - joiner_clock();
+        if (rt_r32(G_MEM, c->ecx + 0x54) == 0) own_adv[k] = lead < 0 ? 0 : lead > 0.5 ? 0.5 : lead;   /* standing still */
+        if (probe.armed && !probe.seg && go == probe.go) { probe.seg = 1; probe.t_seg = now_us(); probe.lead = lead; }
         return 0;
     }
     if (addr == FOLLOWER_UPDATE) {                          /* GoFollower::Update(float): ecx = the follower, +4 its Go */
         uint32_t go = rt_r32(G_MEM, c->ecx + 4);
-        if (own_lead > 0 && lead_on() && is_own(go) && is_joiner(c)) {   /* play it on the advanced clock */
+        int k = own_slot(go);
+        if (k >= 0 && own_adv[k] > 0 && lead_on() && is_joiner(c)) {   /* play it on its advanced clock */
             static int inside; uint32_t wt = rt_r32(G_MEM, 0x7a05ccu);
             if (!inside && wt) {
                 uint32_t lo = rt_r32(G_MEM, wt + 0x10), hi = rt_r32(G_MEM, wt + 0x14), a = ARG(0);
-                double t = rd(wt + 0x10) + own_lead; uint64_t v; memcpy(&v, &t, 8);
+                double t = rd(wt + 0x10) + own_adv[k]; uint64_t v; memcpy(&v, &t, 8);
                 rt_w32(G_MEM, wt + 0x10, (uint32_t)v); rt_w32(G_MEM, wt + 0x14, (uint32_t)(v >> 32));
                 inside = 1; ext_thiscall(c, addr, c->ecx, 1, &a); inside = 0;
                 rt_w32(G_MEM, wt + 0x10, lo); rt_w32(G_MEM, wt + 0x14, hi);
@@ -158,7 +155,7 @@ static void feel_moved(Ctx *c, uint32_t go)            /* DS_MPFEEL: has the ord
     }
     double ms = (now_us() - probe.t0) / 1000.0; probe.armed = 0; probe.sum += ms; probe.n++;
     fprintf(stderr, "mpfeel: order (job %u) to movement %.0f ms (average %.0f ms over %d); first segment arrived after %.0f ms, set %.0f ms ahead of this clock; own heroes played %.0f ms ahead\n",
-            probe.job, ms, probe.sum / probe.n, probe.n, probe.seg ? (probe.t_seg - probe.t0) / 1000.0 : -1.0, probe.seg ? probe.lead * 1000 : 0.0, lead_on() ? own_lead * 1000 : 0.0);
+            probe.job, ms, probe.sum / probe.n, probe.n, probe.seg ? (probe.t_seg - probe.t0) / 1000.0 : -1.0, probe.seg ? probe.lead * 1000 : 0.0, lead_on() && own_slot(probe.go) >= 0 ? own_adv[own_slot(probe.go)] * 1000 : 0.0);
 }
 int mpfeel_override(Ctx *c, uint32_t addr)
 {

@@ -230,14 +230,17 @@ static MTLCompareFunction cmpf(uint32_t f)
 static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int has_depth)
 {
     uint32_t blend = r->rs[27] ? 1 : 0, sb = blend ? r->rs[19] : 2, db = blend ? r->rs[20] : 1;
-    uint64_t key = ((uint64_t)fvf << 32) | (blend << 16) | (sb << 8) | (db << 4) | (uint64_t)has_depth << 1 | 1;   // never 0
+    uint32_t atest = r->rs[15] ? 1 : 0;                                                       // D3DRS_ALPHATESTENABLE
+    uint64_t key = ((uint64_t)fvf << 32) | (blend << 16) | (sb << 8) | (db << 4) | atest << 2 | (uint64_t)has_depth << 1 | 1;   // never 0
     if (key == r->pso_k[r->pso_last]) return r->pso_v[r->pso_last];                                         // same as the last draw
     uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 54);
     while (r->pso_k[h] && r->pso_k[h] != key) h = (h + 1) & 1023;
     if (r->pso_k[h]) { r->pso_last = h; return r->pso_v[h]; }
     id<MTLRenderPipelineState> p;
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; NSError *err = nil;
-    d.vertexFunction = [r->lib newFunctionWithName:@"vs_main"]; d.fragmentFunction = [r->lib newFunctionWithName:@"fs_main"];
+    d.vertexFunction = [r->lib newFunctionWithName:@"vs_main"];
+    {   MTLFunctionConstantValues *fc = [MTLFunctionConstantValues new]; bool at = atest; [fc setConstantValue:&at type:MTLDataTypeBool atIndex:0];
+        d.fragmentFunction = [r->lib newFunctionWithName:@"fs_main" constantValues:fc error:&err]; }
     d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
     if (has_depth) d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
     if (blend) { d.colorAttachments[0].blendingEnabled = YES; d.colorAttachments[0].sourceRGBBlendFactor = d.colorAttachments[0].sourceAlphaBlendFactor = bf(sb);

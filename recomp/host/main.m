@@ -67,14 +67,18 @@ static void *render_thread(void *arg)
                         [CATransaction begin]; [CATransaction setDisableActions:YES]; layer.drawableSize = CGSizeMake(w, h); [CATransaction commit];
                     }
                     uint32_t fno = ++frames;
-                    if (test_mode) {   // one line per second: frames presented and the mode
-                        static double t0; double now = CACurrentMediaTime(); static uint32_t f0;
+                    if (test_mode) {   // one line per second: frames presented, the mode, GPU time per frame and frame-time spikes
+                        static double t0, last; double now = CACurrentMediaTime(); static uint32_t f0; static double worst; static int spikes;
                         if (!t0) t0 = now;
+                        if (last) { double ft = now - last; if (ft > worst) worst = ft; if (ft > 0.025) spikes++; } last = now;
                         if (now - t0 >= 1.0) {
-                            extern long dsr_stat[8];
-                            fprintf(stderr, "DungeonSiegeNative: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld\n", fno, w, h, (fno - f0) / (now - t0),
-                                    dsr_stat[0], dsr_stat[1], dsr_stat[2], dsr_stat[3], dsr_stat[4]);
-                            t0 = now; f0 = fno; }
+                            extern long dsr_stat[8]; extern double dsr_gpu_ms[100000]; extern int dsr_frame;
+                            double gsum = 0, gmax = 0; int gn = 0;   // frames whose command buffers have completed (two behind)
+                            for (int k = (int)f0 - 2; k < dsr_frame - 2; k++) if (k >= 0 && k < 100000) { gsum += dsr_gpu_ms[k]; if (dsr_gpu_ms[k] > gmax) gmax = dsr_gpu_ms[k]; gn++; }
+                            fprintf(stderr, "DungeonSiegeNative: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld; gpu %.2f ms (max %.2f); longest frame %.1f ms, %d over 25 ms\n",
+                                    fno, w, h, (fno - f0) / (now - t0), dsr_stat[0], dsr_stat[1], dsr_stat[2], dsr_stat[3], dsr_stat[4],
+                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes);
+                            t0 = now; f0 = fno; worst = 0; spikes = 0; }
                     }
                     {   // DS_SHOT=<path>,<frame>: save that frame as a PNG (development)
                         static long shot_at = -2; static char shot_path[1024];
