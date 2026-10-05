@@ -1,6 +1,6 @@
 # Dungeon Siege for Apple Silicon Macs
 
-Play the original **Dungeon Siege** (GOG, version 1.11.1) natively on an Apple Silicon Mac: no Wine, no Rosetta, no
+Play the original **Dungeon Siege** (GOG or Steam, version 1.11.1) natively on an Apple Silicon Mac: no Wine, no Rosetta, no
 Windows components. The installer recompiles **your own copy** of the game from x86 into native arm64 code and links it
 with a macOS implementation of everything the game uses from Windows (windows and input, files, threads, DirectDraw and
 Direct3D 7 on Metal, DirectSound on Core Audio). The result is an ordinary Mac app.
@@ -22,21 +22,35 @@ troubleshooting.
 
 ## Features
 
-- **Native performance** at your display's resolution and refresh rate, with steady frame pacing.
-- **A launch window** in the game's style for single player or multiplayer, resolution, **view distance** and frame
-  rate. Your choices are remembered, so normally you just press Play.
-- **Multiplayer** on LAN and over the internet, compatible with DirectPlay on Windows, plus the Yesterhaven map.
+- **Scales with your Mac.**
+  - The frame rate follows your display: 60 Hz, or 120 Hz on ProMotion screens.
+  - Unlimited is offered for faster hardware.
+  - View distance goes up to 300% of the original.
+  - Defaults are chosen from your Mac's GPU: Very Far on Max and Ultra chips, Farther elsewhere.
+  - Nothing is capped to suit older Macs.
+- **Native performance.** The game's own code runs as optimised arm64 with no translation layer. Its work per frame
+  is down by about 40% and the renderer's CPU time is about halved, with frame pacing that stays steady.
+- **Multiplayer and cross-play** on LAN and over the internet: Macs with each other, and Macs with PCs running the
+  Windows game. Tested in both directions: Mac hosting with a PC joining, and a PC hosting with a Mac joining. Also
+  covers the Yesterhaven map, router port forwarding done for you, and quicker movement response for joining players.
+- **GOG or Steam.** Either edition of 1.11.1 works. The Steam executable has no DRM, and a Steam copy plays with GOG
+  players.
+- **A launch window** in the game's style: single player or multiplayer, Legends of Aranna, mods, resolution, view
+  distance and frame rate, all remembered. **Updates** come from it too: it tells you when a newer version is on
+  GitHub and installs it.
 - **Legends of Aranna**, the expansion, from your own copy's data (`./install.sh --expansion <folder>`).
-- **Built-in view distance** from the original up to 300%, without mods (150% matches the community SeeFar mod).
-- **Best graphics by default:** a new installation starts with all complex shadows and trilinear filtering (the
-  2002 game picks lower settings for any video card newer than its hardware table); choices in Options still apply.
-- **The game's own sound system** (Miles), recompiled as well, playing through Core Audio.
-- Mouse, trackpad and keyboard, saving and loading, the full single-player campaign.
+- **Mods** chosen per game in the launcher (Yesterhaven, ResolutionFix, UberUI and others; credits in
+  [docs/MODS.md](docs/MODS.md)).
+- **Best graphics by default:** a new installation starts with all complex shadows and trilinear filtering. The 2002
+  game picks lower settings for any video card newer than its hardware table. Choices in Options still apply.
+- **The game's own sound and video** (Miles, Bink), recompiled as well and playing through Core Audio.
+- Mouse, trackpad and keyboard, saving and loading, and the full single-player campaign.
 - **Crash and freeze reports** in `~/Games/DungeonSiegeNative/CrashReports`, so problems can be diagnosed.
+- **A second app, Dungeon Siege Nightly,** for the newest experimental work (`./install.sh --nightly`).
 
 ## How it works
 
-`install.sh` checks that the executable is the GOG 1.11.1 build, then:
+`install.sh` checks that the executable is the GOG or Steam 1.11.1 build, then:
 
 1. analyses its x86 code and translates every function into C (`recomp/tools/analyze.py`, `recomp/tools/lift.py`),
    and does the same for the game's Miles Sound System DLLs;
@@ -49,12 +63,21 @@ and on complete routines. Details: [recomp/README.md](recomp/README.md).
 
 ## Status
 
-- Single-player campaign: playable.
-- Multiplayer: LAN and internet games, including Yesterhaven, with Mac and Windows players (Windows compatibility
-  not yet tested): [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
-- *Legends of Aranna*: its campaign runs on the recompiled engine from your own copy's data, with the engine functions
-  it added written anew (not everything yet): [docs/LEGENDS-OF-ARANNA.md](docs/LEGENDS-OF-ARANNA.md).
-- Only the GOG release 1.11.1 of Dungeon Siege is supported as the base game.
+- **Single-player campaign:** playable.
+- **Multiplayer:**
+  - LAN and internet games, including Yesterhaven;
+  - cross-play tested against the Windows game running on Linux through Proton with Microsoft's own DirectPlay, in
+    both directions and over the internet;
+  - a Mac built from the Steam copy played with a GOG PC.
+
+  A native Windows PC hasn't been tried yet, but the PC side was the Windows game and Microsoft's DirectPlay
+  ([docs/MULTIPLAYER.md](docs/MULTIPLAYER.md)).
+- **Legends of Aranna:** its campaign runs on the recompiled engine from your own copy's data, with the engine
+  functions it added written anew. Not everything is done yet
+  ([docs/LEGENDS-OF-ARANNA.md](docs/LEGENDS-OF-ARANNA.md)).
+- **Supported base games:** Dungeon Siege 1.11.1 from GOG or Steam. The disc releases use other executables.
+- **Hardened:** the network code, file handling and renderer were security-reviewed and fuzz-tested. The protocol's
+  own limits are described in [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md#security).
 
 ## Legal
 

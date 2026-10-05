@@ -10,13 +10,15 @@ input, files, threads, DirectDraw/Direct3D 7 on Metal, DirectSound on Core Audio
 
 - A Mac with **Apple Silicon** and macOS 13 or newer.
 - **Xcode Command Line Tools**: `xcode-select --install` (provides `clang` and `python3`).
-- **Dungeon Siege from GOG, version 1.11.1**, either
-  - an installed game folder (for example from GOG Galaxy on a PC, copied over, or an existing Wine/CrossOver install), or
-  - the GOG **offline installer** (`setup_dungeon_siege_*.exe`); for this also install `innoextract`
-    (`brew install innoextract`).
+- **Dungeon Siege, version 1.11.1, from GOG or Steam**:
+  - a GOG game folder (for example from GOG Galaxy on a PC, copied over, or an existing Wine/CrossOver install);
+  - the GOG **offline installer** (`setup_dungeon_siege_*.exe`), for which you also need `innoextract`
+    (`brew install innoextract`); or
+  - the **Steam** edition, downloaded through Steam on the Mac (see *The Steam edition* below). Its executable
+    has no DRM.
 
-  The installer checks the executable's SHA-256 and refuses anything else. Steam and disc versions use a different
-  executable and are not supported.
+  The installer checks the executable's SHA-256 and refuses anything else. Disc versions use a different executable
+  and are not supported.
 - About 2 GB of free space and a few minutes for the build (the recompiler is written in Python and installs its two
   helper packages, `capstone` and `unicorn`, into `recomp/.venv` on first use).
 
