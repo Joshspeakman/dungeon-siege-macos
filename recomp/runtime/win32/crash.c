@@ -329,7 +329,8 @@ static void *watchdog(void *arg)
 void w32_crash_init(const char *data_dir, const char *build)
 {
     snprintf(report_dir, sizeof report_dir, "%s/CrashReports", data_dir); mkdir(report_dir, 0755);
-    snprintf(log_path, sizeof log_path, "%s/DungeonSiegeNative.log", data_dir);
+    if (getenv("DS_LOG_FILE")) snprintf(log_path, sizeof log_path, "%s", getenv("DS_LOG_FILE"));   /* the launcher's (Nightly has its own) */
+    else snprintf(log_path, sizeof log_path, "%s/DungeonSiegeNative.log", data_dir);
     snprintf(build_id, sizeof build_id, "%s", build ? build : "?");
     pthread_key_create(&tkey, on_thread_exit);
     pthread_mutex_lock(&tlock); for (int k = 0; k < 256; k++) if (threads[k].used && threads[k].pt == pthread_self()) pthread_setspecific(tkey, &threads[k]); pthread_mutex_unlock(&tlock);

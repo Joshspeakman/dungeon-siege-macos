@@ -82,7 +82,7 @@ static void *render_thread(void *arg)
                     }
                     {   // DS_SHOT=<path>,<frame>: save that frame as a PNG (development)
                         static long shot_at = -2; static char shot_path[1024];
-                        if (shot_at == -2) { const char *e = getenv("DS_SHOT"); shot_at = -1; if (e) { const char *cm = strrchr(e, ','); if (cm) { snprintf(shot_path, sizeof shot_path, "%.*s", (int)(cm - e), e); shot_at = atol(cm + 1); } } }
+                        if (shot_at == -2) { const char *e = test_mode ? getenv("DS_SHOT") : 0; shot_at = -1;   /* test mode only: it writes anywhere */ if (e) { const char *cm = strrchr(e, ','); if (cm) { snprintf(shot_path, sizeof shot_path, "%.*s", (int)(cm - e), e); shot_at = atol(cm + 1); } } }
                         const char *sp = test_mode ? script_tick(fno) : 0;
                         if (sp) { snprintf(shot_path, sizeof shot_path, "%s", sp); shot_at = fno; }
                         if ((long)fno == shot_at) {
