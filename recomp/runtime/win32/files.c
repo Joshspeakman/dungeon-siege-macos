@@ -62,7 +62,7 @@ int w32_host_path(const char *win, char *out, size_t cap, int mode)
     char *save, *tok = strtok_r(full + 2, "\\", &save);
     while (tok) {
         if (!strcmp(tok, "..")) { if (np) np--; }
-        else if (strcmp(tok, ".") && *tok) parts[np++] = tok;
+        else if (strcmp(tok, ".") && *tok) { if (np == 256) return -1; parts[np++] = tok; }   /* too deep: no such path */
         tok = strtok_r(0, "\\", &save);
     }
     norm[0] = 'c'; norm[1] = ':'; norm[2] = 0; k = 2;
@@ -146,9 +146,10 @@ static void full_win_path(const char *in, char *out, size_t cap)
     char *parts[256]; int np = 0;
     for (char *s = tmp; *s; s++) if (*s == '/') *s = '\\';
     char drive = (char)(tmp[0] & ~32), *save, *tok = strtok_r(tmp + 2, "\\", &save);
-    while (tok) { if (!strcmp(tok, "..")) { if (np) np--; } else if (strcmp(tok, ".") && *tok) parts[np++] = tok; tok = strtok_r(0, "\\", &save); }
+    while (tok) { if (!strcmp(tok, "..")) { if (np) np--; } else if (strcmp(tok, ".") && *tok && np < 256) parts[np++] = tok; tok = strtok_r(0, "\\", &save); }
     size_t k = (size_t)snprintf(out, cap, "%c:", drive);
-    for (int j = 0; j < np; j++) k += (size_t)snprintf(out + k, cap - k, "\\%s", parts[j]);
+    for (int j = 0; j < np && k < cap; j++) k += (size_t)snprintf(out + k, cap - k, "\\%s", parts[j]);   /* stops when full */
+    if (k >= cap) return;
     if (!np) snprintf(out + k, cap - k, "\\");
     size_t l = strlen(in);
     if (l && (in[l - 1] == '\\' || in[l - 1] == '/') && np) snprintf(out + strlen(out), cap - strlen(out), "\\");
@@ -267,9 +268,13 @@ IMPL(kernel32, CreateFileA)
     if (getenv("W32_FILELOG")) fprintf(stderr, "w32: CreateFileA(%s) -> %x fd %d (%s)\n", GS(ARG(0)), h, fd, p);
     RET(h, 7);
 }
+typedef struct Mapping Mapping;
+static int mapping_named(const Mapping *m);
+void w32_mapping_free(void *p);
 void w32_file_closed(HObj *o)
 {
     if (o->type == H_FILE) { File *f = o->p; close(f->fd); free(f); }
+    else if (o->type == H_MAPPING && !mapping_named(o->p)) w32_mapping_free(o->p);   /* views stay valid (mmap keeps the file) */
 }
 IMPL(kernel32, ReadFile)
 {
@@ -397,8 +402,10 @@ IMPL(kernel32, FindClose)
 }
 
 /* ---- file mappings: the host file is mapped straight into guest memory ---- */
-typedef struct Mapping { int fd; uint32_t size, writable; char name[64]; } Mapping;
+struct Mapping { int fd; uint32_t size, writable; char name[64]; };
 static Mapping *mnamed[32]; static uint32_t mnamed_h[32]; static int nmnamed;
+static int mapping_named(const Mapping *m) { for (int k = 0; k < nmnamed; k++) if (mnamed[k] == m) return 1; return 0; }   /* kept: OpenFileMapping */
+void w32_mapping_free(void *p) { Mapping *m = p; if (m->fd >= 0) close(m->fd); free(m); }
 IMPL(kernel32, CreateFileMappingA)
 {
     uint32_t fh = ARG(0), prot = ARG(2), lo = ARG(4), name = ARG(5);
@@ -407,7 +414,8 @@ IMPL(kernel32, CreateFileMappingA)
     else {
         HObj *o = h_get(fh, H_FILE); struct stat st;
         if (!o) { free(m); w32_set_last_error(c, 6); RET(0, 6); }
-        m->fd = dup(((File *)o->p)->fd); fstat(m->fd, &st);
+        m->fd = dup(((File *)o->p)->fd);
+        if (m->fd < 0 || fstat(m->fd, &st)) { if (m->fd >= 0) close(m->fd); free(m); w32_set_last_error(c, 4); RET(0, 6); }   /* out of descriptors */
         m->size = lo ? lo : (uint32_t)st.st_size;
         if (m->writable && (uint64_t)st.st_size < m->size) ftruncate(m->fd, m->size);
     }
