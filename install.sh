@@ -15,6 +15,12 @@
 #                                      folder), Legends of Aranna, Yesterhaven and mods, saves and launcher settings;
 #                                      the game is copied into the data folder, so the backup can be put away again.
 # install.sh --save-collection <folder>  writes that backup folder from this Mac's current setup.
+# install.sh --nightly                 installs "Dungeon Siege Nightly.app" next to the stable app: the newest
+#                                      experimental work (the repository's nightly branch, fetched from GitHub and
+#                                      built in build/nightly; this checkout is left as it is). It shares the data
+#                                      folder (saves, settings, mods) with the stable app. Run it again to update.
+#
+# With no game option, the game folder of an app already installed is used again (reinstall or update).
 #
 # Builds the natively recompiled Dungeon Siege from your own copy of the GOG 1.11.1 game and installs
 # "Dungeon Siege Native.app" (no Wine, no Rosetta). The game folder is only read: settings, saves and logs go to the
@@ -23,7 +29,10 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+NIGHTLY=""; AS_NIGHTLY=""; ARGS=()
 while [ $# -gt 0 ]; do
+  case "$1" in --nightly) NIGHTLY=1; shift; continue;; --as-nightly) AS_NIGHTLY=1; shift; continue;; esac
+  ARGS+=("$1"); [ $# -gt 1 ] && case "$1" in --*) ARGS+=("$2");; esac
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
     --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;;
@@ -31,6 +40,29 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1"; exit 1;;
   esac
 done
+# the stable app, or (--as-nightly, used by --nightly) the nightly one next to it
+APP_NAME="Dungeon Siege Native"; APP_SHOWN="Dungeon Siege"; APP_ID=native; APP_LOG=DungeonSiegeNative
+[ -n "$AS_NIGHTLY" ] && { APP_NAME="Dungeon Siege Nightly"; APP_SHOWN="Dungeon Siege Nightly"; APP_ID=nightly; APP_LOG=DungeonSiegeNightly; }
+# the game folder an installed app uses (for reinstalls and updates without options)
+installed_game() {
+  local a L; for a in "Dungeon Siege Native" "Dungeon Siege Nightly"; do
+    L="$APPS/$a.app/Contents/MacOS/launcher"
+    [ -f "$L" ] && sed -n 's/^GAME="\${DS_GAME_DIR:-\(.*\)}"; DATA=.*/\1/p' "$L" | head -1 && return 0
+  done; return 0
+}
+# --nightly: fetch the nightly branch into build/nightly and let its own install.sh install the nightly app
+if [ -n "$NIGHTLY" ] && [ -z "$AS_NIGHTLY" ]; then
+  command -v git >/dev/null || { echo "git is needed for --nightly"; exit 1; }
+  W="$HERE/build/nightly"; echo "== fetching the nightly branch"
+  git -C "$HERE" fetch -q origin nightly
+  git -C "$HERE" worktree prune
+  if [ -e "$W/.git" ]; then git -C "$W" checkout -q -f --detach origin/nightly
+  else mkdir -p "$HERE/build"; git -C "$HERE" worktree add -q -f --detach "$W" origin/nightly; fi
+  echo "== nightly: $(git -C "$W" log -1 --format='%h %s')"
+  [ -e "$W/recomp/.venv" ] || [ ! -d "$HERE/recomp/.venv" ] || ln -s "$HERE/recomp/.venv" "$W/recomp/.venv"   # share the tools
+  if [ -z "$GAME$GOG_EXE$COL" ]; then G="$(installed_game)"; [ -n "$G" ] && ARGS+=(--game-dir "$G"); fi
+  exec "$W/install.sh" --as-nightly ${ARGS[@]+"${ARGS[@]}"}
+fi
 # Yesterhaven: the map and its resources go to the Mods list (<data>/mods; ticked by default, for both games); the
 # launcher links ticked mods into the data folder's view of the game folder, which the game sees as its own Maps and
 # Resources folders. The game folder itself is not touched.
@@ -79,8 +111,7 @@ GOG_SHA=41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02
 DOCS="$DATA/drive_c/Users/player/Documents"
 # --save-collection: the game folder, the expansion's archives, the mods, saves and launcher settings, in one folder
 if [ -n "$SAVECOL" ]; then
-  L="$APPS/Dungeon Siege Native.app/Contents/MacOS/launcher"
-  G="$( [ -f "$L" ] && sed -n 's/^GAME="\${DS_GAME_DIR:-\(.*\)}"; DATA=.*/\1/p' "$L" | head -1 || true)"
+  G="$(installed_game)"
   [ -n "$G" ] && [ -f "$G/DungeonSiege.exe" ] || { echo "the installed app's game folder was not found; install first"; exit 1; }
   mkdir -p "$SAVECOL"; echo "== saving the collection in $SAVECOL"
   rsync -a "$G/" "$SAVECOL/Dungeon Siege/"
@@ -132,6 +163,7 @@ if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; th
   GAME="$(dirname "$(find "$X" -name DungeonSiege.exe -print -quit)")"
   [ -f "$GAME/DungeonSiege.exe" ] || { echo "DungeonSiege.exe not found in the installer"; exit 1; }
 fi
+[ -n "$GAME" ] || GAME="$(installed_game)"
 [ -n "$GAME" ] || { echo "usage: install.sh --game-dir <Dungeon Siege folder> | --gog-installer <setup_dungeon_siege_*.exe>"; exit 1; }
 for tool in clang python3; do command -v $tool >/dev/null || { echo "$tool is missing: install the Xcode command line tools (xcode-select --install)"; exit 1; }; done
 [ "$(uname -m)" = arm64 ] || { echo "the native build is for Apple Silicon Macs"; exit 1; }
@@ -143,29 +175,29 @@ echo "== recompiling $EXE (a few minutes)"
 "$HERE/recomp/build.sh" "$EXE"
 "$HERE/recomp/tools/build_app.sh" "$HERE/recomp/work/full" >/dev/null
 
-A="$APPS/Dungeon Siege Native.app"; echo "== installing $A"
+A="$APPS/$APP_NAME.app"; echo "== installing $A"
 mkdir -p "$APPS"; rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 cp "$HERE/recomp/work/full/app/DungeonSiegeNative" "$HERE/recomp/work/full/app/shaders.metal" "$HERE/recomp/work/full/app/dsr_snapshot.bin" "$A/Contents/MacOS/"
 cp "$HERE/recomp/work/DungeonSiege.exe" "$A/Contents/Resources/DungeonSiege.exe"
 cat > "$A/Contents/MacOS/launcher" <<LAUNCH
 #!/bin/bash
-# Dungeon Siege Native launcher (generated by install.sh)
+# $APP_NAME launcher (generated by install.sh)
 GAME="\${DS_GAME_DIR:-$GAME}"; DATA="\${DS_NATIVE_DATA:-$DATA}"; DOCS="\$DATA/drive_c/Users/player/Documents"
 mkdir -p "\$DOCS"
 mkdir -p "\$DATA"
-L="\$DATA/DungeonSiegeNative.log"                                   # keep the log small: previous one as .old
-[ -f "\$L" ] && [ "\$(stat -f %z "\$L")" -gt 5000000 ] && mv -f "\$L" "\$DATA/DungeonSiegeNative.old.log"
+L="\$DATA/$APP_LOG.log"                                   # keep the log small: previous one as .old
+[ -f "\$L" ] && [ "\$(stat -f %z "\$L")" -gt 5000000 ] && mv -f "\$L" "\$DATA/$APP_LOG.old.log"
 B="\$(cd "\$(dirname "\$0")" && pwd)"
-exec "\$B/DungeonSiegeNative" --exe "\$B/../Resources/DungeonSiege.exe" --game "\$GAME" --data "\$DATA" 2>>"\$DATA/DungeonSiegeNative.log"
+exec "\$B/DungeonSiegeNative" --exe "\$B/../Resources/DungeonSiege.exe" --game "\$GAME" --data "\$DATA" 2>>"\$DATA/$APP_LOG.log"
 LAUNCH
 chmod +x "$A/Contents/MacOS/launcher"
 cat > "$A/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Dungeon Siege Native</string>
-  <key>CFBundleDisplayName</key><string>Dungeon Siege</string>
-  <key>CFBundleIdentifier</key><string>io.github.dungeon-siege-macos.native</string>
+  <key>CFBundleName</key><string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key><string>$APP_SHOWN</string>
+  <key>CFBundleIdentifier</key><string>io.github.dungeon-siege-macos.$APP_ID</string>
   <key>CFBundleExecutable</key><string>launcher</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
