@@ -37,6 +37,9 @@ IMPL(wsock32, ord52)
             freeifaddrs(ifs);
         }
         if (!n) addrs[n++] = htonl(INADDR_LOOPBACK);
+        uint32_t portmap_public_ip(void); uint32_t pub = getenv("DS_NO_PORTMAP") ? 0 : portmap_public_ip();   /* for internet players */
+        int dup = 0; for (int i = 0; i < n; i++) if (addrs[i] == pub) dup = 1;
+        if (pub && !dup && n < 16) { memmove(addrs + 1, addrs, sizeof *addrs * (size_t)n); addrs[0] = pub; n++; }   /* first: the one to give out */
     } else {
         struct addrinfo hint = {0}, *res = 0; hint.ai_family = AF_INET;
         if (getaddrinfo(name, 0, &hint, &res)) RET(0, 1);

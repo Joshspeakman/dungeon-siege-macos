@@ -1074,6 +1074,7 @@ static void sv_Host(Ctx *c)
     if (ensure_endpoint(s, 1, port)) { pthread_mutex_unlock(&s->m); LOG("server: no UDP port available\n"); RET(DPNERR_GENERIC, 8); }
     s->hosting = 1; s->ntver = 1; s->server_dpnid = make_dpnid(s, 0); s->server_ctx = pctx;
     LOG("server: hosting on UDP %u (enumeration port %s)\n", dp8_port(s->ep), dp8_enum_port_bound(s->ep) ? "6073" : "unavailable");
+    { void portmap_open(uint16_t, uint16_t); portmap_open(dp8_port(s->ep), dp8_enum_port_bound(s->ep) ? DP8_ENUM_PORT : 0); }   /* internet players */
     pthread_mutex_unlock(&s->m);
     /* the server's own player, indicated on the calling thread as DirectPlay does */
     uint32_t pm = heap_alloc(w32_process_heap, 8, 12); rt_w32(G_MEM, pm, 12); rt_w32(G_MEM, pm + 4, s->server_dpnid); rt_w32(G_MEM, pm + 8, pctx);
@@ -1094,6 +1095,11 @@ static void sv_GetLocalHostAddresses(Ctx *c)
         freeifaddrs(ifs);
     }
     if (!n) { addrs[0].sin_family = AF_INET; addrs[0].sin_addr.s_addr = htonl(INADDR_LOOPBACK); addrs[0].sin_port = htons(dp8_port(s->ep)); n = 1; }
+    {   /* the router's public address too, for players on the internet (when the router told us) */
+        uint32_t portmap_public_ip(void); uint32_t pub = getenv("DS_NO_PORTMAP") ? 0 : portmap_public_ip(); int dup = 0;
+        for (int i = 0; i < n; i++) if (addrs[i].sin_addr.s_addr == pub) dup = 1;
+        if (pub && !dup && n < 16) { memmove(addrs + 1, addrs, sizeof *addrs * (size_t)n); addrs[0].sin_addr.s_addr = pub; n++; }   /* first: the one to give out */
+    }
     uint32_t have = rt_r32(G_MEM, pcount); rt_w32(G_MEM, pcount, (uint32_t)n);
     if (!arr || have < (uint32_t)n) RET(DPNERR_BUFFERTOOSMALL, 4);
     for (int i = 0; i < n; i++) rt_w32(G_MEM, arr + 4 * (uint32_t)i, address_object(&addrs[i]));
@@ -1165,6 +1171,7 @@ static void cs_Close(Ctx *c)
     if (s->server && s->hosting) {
         for (int i = 0; i < 256; i++) if (s->pl[i].used && s->pl[i].conn) { send_terminate(s->pl[i].conn, 0); dp8_disconnect(s->pl[i].conn, 0); s->pl[i].leaving = 1; }
         s->hosting = 0;
+        void portmap_close(void); pthread_mutex_unlock(&s->m); portmap_close(); pthread_mutex_lock(&s->m);
     }
     if (!s->server && s->srv) { dp8_disconnect(s->srv, 0); s->connected = 0; }
     dp8_ep *ep = s->ep;

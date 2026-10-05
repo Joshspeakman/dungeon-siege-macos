@@ -25,10 +25,15 @@ and the firewall (if it is on) whether it may accept incoming connections. Allow
 The host and everyone joining use the **Internet** screen: the game only lets players who joined from the Internet
 screen into a game hosted from it (and LAN players into LAN games).
 
-- **Host:** Internet → **Host Game**. Give the other players your address.
+- **Host:** Internet → **Host Game**. Give the other players the first address under *Host IP Address* (your
+  router's public address).
 - **Join:** Internet → type the host's address under *Enter host's IP address* → **Connect**.
 
-The host's router must let the game's traffic in. Either:
+The host's router must let the game's traffic in. When a Mac hosts, this normally happens by itself: the app asks the
+router to forward the game's ports (NAT-PMP or UPnP, which most home routers have switched on), shows the router's
+public address first in the address lines, and removes the forwarding when the game ends. Players joining need
+nothing. (Tested: a PC on the open internet joined a Mac behind a home router this way.) If the router doesn't do
+either, or for a Windows host without DirectPlay's own UPnP support:
 
 - **Forward UDP ports 6073 and 2302–2400** to the host's computer on its router, and give players the router's public
   address (shown by any "what is my IP" site); or
