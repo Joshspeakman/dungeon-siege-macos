@@ -47,7 +47,18 @@ What goes where:
 | `~/Applications/Dungeon Siege Native.app` | The recompiled game, built on your Mac from your copy. |
 | `~/Games/DungeonSiegeNative` | Saves and the game's settings (`drive_c/Users/player/Documents/Dungeon Siege`), the launch window's choices (`launcher.plist`), the log (`DungeonSiegeNative.log`) and crash reports (`CrashReports/`). |
 
-To update: `git pull`, then run the same `install.sh` command again (saves are kept).
+To update, use the launch window's **Updates** row. When the app opens, it asks GitHub whether a newer version of the
+app's branch exists: `main` for Dungeon Siege, `nightly` for Dungeon Siege Nightly. When it says **Update available**,
+press it:
+
+- The new version is downloaded into `build/stable` (or `build/nightly`) in this folder; your own checkout isn't
+  touched.
+- The app is rebuilt from your copy of the game, which takes a few minutes, with a progress window.
+- The app then restarts.
+
+Your game folder, saves, settings and mods are kept. The output goes to `update.log` in the data folder. This needs
+the app to have been installed from a git clone of the repository, and (while the repository is private) a GitHub
+sign-in that `git` can use. Updating by hand still works: `git pull`, then the same `install.sh` command again.
 
 ### The Steam edition
 
