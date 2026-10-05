@@ -1,5 +1,6 @@
 /* Runtime core for recompiled code: guest memory, indirect calls, faults, x87 helpers. */
 #include "rt.h"
+#include <fenv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <setjmp.h>
@@ -91,6 +92,32 @@ uint64_t rt_rdtsc(void)
 }
 
 /* ---- x87 helpers ---- */
+__thread uint32_t rt_host_rc;                  /* the x87 rounding control this thread's FPCR is set to (rt_fpcr_sync) */
+/* the x87 transcendentals through the system maths library, which assumes round-to-nearest: this thread's rounding
+ * mode is set to nearest around the call (the empty asm statements tie the call to the switches, so the compiler can't
+ * move it across them) */
+#if defined(__aarch64__)
+#define NEAR_BEGIN uint64_t fpcr0 = __builtin_arm_rsr64("fpcr"); int dir = (fpcr0 >> 22) & 3; \
+    if (dir) __builtin_arm_wsr64("fpcr", fpcr0 & ~(3ull << 22));
+#define NEAR_END   if (dir) __builtin_arm_wsr64("fpcr", fpcr0);
+#else
+#define NEAR_BEGIN
+#define NEAR_END
+#endif
+double rt_x87_1(int op, double x)
+{
+    NEAR_BEGIN __asm__ volatile("" : "+w"(x));
+    double r = op == 0 ? expm1(x * 0.693147180559945309417) : op == 1 ? tan(x) : op == 2 ? sin(x) : cos(x);
+    __asm__ volatile("" : "+w"(r)); NEAR_END
+    return r;
+}
+double rt_x87_2(int op, double y, double x)
+{
+    NEAR_BEGIN __asm__ volatile("" : "+w"(x), "+w"(y));
+    double r = op == 0 ? y * log2(x) : op == 1 ? atan2(y, x) : y * log2(x + 1.0);
+    __asm__ volatile("" : "+w"(r)); NEAR_END
+    return r;
+}
 double rt_f80_load(const uint8_t *M, uint32_t a)
 {
     uint64_t mant; uint16_t se; memcpy(&mant, M + a, 8); memcpy(&se, M + a + 8, 2);
@@ -147,7 +174,7 @@ void rt_fnstenv(Ctx *c, uint32_t a)
 void rt_fldenv(Ctx *c, uint32_t a)
 {
     uint8_t *M = G_MEM;
-    c->fcw = rt_r16(M, a); uint32_t sw = rt_r16(M, a + 4);
+    rt_fcw_set(c, rt_r16(M, a)); uint32_t sw = rt_r16(M, a + 4);
     c->fsw = sw & ~0x3800u; c->top = (sw >> 11) & 7;
 }
 void rt_fnsave(Ctx *c, uint32_t a)
@@ -155,7 +182,7 @@ void rt_fnsave(Ctx *c, uint32_t a)
     rt_fnstenv(c, a); c->fcw &= ~0x3fu;
     rt_w32(G_MEM, a, c->fcw | 0xffff0000u);
     for (int k = 0; k < 8; k++) rt_f80_store(G_MEM, a + 28 + 10 * k, ST(k));
-    c->fcw = 0x37f; c->fsw = 0; c->top = 0;                  /* then FNINIT */
+    rt_fcw_set(c, 0x37f); c->fsw = 0; c->top = 0;            /* then FNINIT */
 }
 void rt_frstor(Ctx *c, uint32_t a)
 {
@@ -178,8 +205,8 @@ int rt_test_run(Ctx *c, uint32_t fn_addr, uint32_t *pc, const char **what)
     GuestFn fn = rt_lookup(fn_addr);
     if (!fn) { *pc = fn_addr; *what = "no such function"; return 2; }
     jmp_buf jb; fault_jmp = &jb;
-    if (setjmp(jb)) { fault_jmp = 0; *pc = fault_pc; *what = fault_what; return 1; }
-    fn(c); fault_jmp = 0; return 0;
+    if (setjmp(jb)) { fault_jmp = 0; rt_fpcr_sync(0x27f); *pc = fault_pc; *what = fault_what; return 1; }
+    rt_fpcr_sync(c->fcw); fn(c); fault_jmp = 0; rt_fpcr_sync(0x27f); return 0;   /* the caller's (Python's) rounding back */
 }
 uint32_t rt_test_flags(const Ctx *c) { return flags_get(&c->f); }
 
