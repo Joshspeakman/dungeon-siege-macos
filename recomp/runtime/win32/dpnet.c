@@ -264,9 +264,9 @@ static void address_url(const struct sockaddr_in *a, char *out, size_t cap)
 }
 static uint32_t gstr_w(const Blob *b)                                  /* guest copy of a UTF-16 string (0 if none) */
 {
-    if (!b->n) return 0; uint32_t g = heap_alloc(w32_process_heap, 8, b->n + 2); memcpy(GP(g), b->p, b->n); return g;
+    if (!b->n || b->n > 0x100000) return 0; uint32_t g = heap_alloc(w32_process_heap, 8, b->n + 2); if (g) memcpy(GP(g), b->p, b->n); return g;
 }
-static uint32_t gcopy(const void *p, uint32_t n) { if (!n) return 0; uint32_t g = heap_alloc(w32_process_heap, 0, n); memcpy(GP(g), p, n); return g; }
+static uint32_t gcopy(const void *p, uint32_t n) { if (!n) return 0; uint32_t g = heap_alloc(w32_process_heap, 0, n); if (g) memcpy(GP(g), p, n); return g; }
 static void gfree(uint32_t g) { if (g) heap_free(w32_process_heap, g); }
 static void wide_blob(Blob *b, uint32_t p)                             /* guest UTF-16 string -> blob incl. terminator */
 {
@@ -281,6 +281,7 @@ typedef struct Ev {
     int (*post)(Ctx *, struct Ev *, uint32_t pmsg, uint32_t hr);      /* after the handler (read results, reply on the wire) */
     uint32_t pmsg_size; uint64_t queued_us;
 } Ev;
+static int enum_events; enum { MAX_ENUM_EVENTS = 32 };        /* enumeration queries/responses waiting for the game */
 static Ev *evq, *evq_tail; static pthread_mutex_t evm = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t evcv = PTHREAD_COND_INITIALIZER;
 static int dispatcher_started;
 static void dispatch_loop(Ctx *c, void *arg);
@@ -473,7 +474,7 @@ static int post_indicate_connect(Ctx *c, Ev *e, uint32_t pm, uint32_t hr)
     Blob r = {0}; if (reply && rsize) blob_set(&r, GP(reply), rsize);
     gfree(e->a[0]); obj_release(O(e->a[6])); obj_release(O(e->a[7]));
     pthread_mutex_lock(&s->m);
-    Player *p = player_by_conn(s, e->conn);
+    Player *p = e->conn ? player_by_conn(s, e->conn) : 0;                 /* 0: the connection closed meanwhile */
     if (p && (int32_t)hr >= 0) {
         p->ctx = pctx; s->ntver++; p->dpnid = make_dpnid(s, (uint32_t)(p - s->pl));
         send_connect_reply(s, p, &r);
@@ -499,7 +500,7 @@ static void server_connect_info(Sess *s, dp8_conn *conn, const uint8_t *m, size_
     const uint8_t *inst = m + 52; static const uint8_t zero[16];
     pthread_mutex_lock(&s->m);
     Player *p = player_by_conn(s, conn);
-    if (!p) { pthread_mutex_unlock(&s->m); return; }
+    if (!p || p->indicated) { pthread_mutex_unlock(&s->m); return; }       /* once per connection */
     uint32_t fail = 0;
     if (memcmp(inst, zero, 16) && memcmp(inst, s->instance, 16)) fail = DPNERR_INVALIDINSTANCE;
     else if ((s->flags & SESS_REQUIREPASSWORD) && (pw.n != s->password.n || memcmp(pw.p, s->password.p, pw.n))) fail = DPNERR_INVALIDPASSWORD;
@@ -521,11 +522,12 @@ static void server_receive(Sess *s, dp8_conn *conn, uint8_t user, const uint8_t 
     if (user & DP8_USER_1) {
         if (n < 4) return;
         uint32_t type = rd32(d);
+        /* the handshake in order: CONNECT_INFO once; its ACK only after the game accepted the player (it has a DPNID) */
         if (type == MSG_CONNECT_INFO) server_connect_info(s, conn, d, n);
-        else if (type == MSG_ACK_CONNECT_INFO && !created) {
+        else if (type == MSG_ACK_CONNECT_INFO && !created && id) {
             pthread_mutex_lock(&s->m); p->created = 1; pthread_mutex_unlock(&s->m);
             Ev *e = new_event(s, M_CREATE_PLAYER); e->a[0] = id; e->a[1] = ctx; e->pmsg_size = 12; e->post = post_create_player; post_event(e);
-        } else if (type == MSG_REQ_PROCESS_COMPLETION && n >= 8) {
+        } else if (type == MSG_REQ_PROCESS_COMPLETION && n >= 8 && created) {
             ev_receive(s, id, ctx, d + 8, n - 8);
             Buf b = {0}; bput32(&b, MSG_PROCESS_COMPLETION); bput32(&b, rd32(d + 4)); send_core(conn, &b);
         } else if (type == MSG_REQ_UPDATE_INFO && n >= 32 && created) {   /* a client changed its name or data */
@@ -544,6 +546,7 @@ static void server_receive(Sess *s, dp8_conn *conn, uint8_t user, const uint8_t 
 }
 static void server_closed(Sess *s, dp8_conn *conn, int reason)
 {
+    pthread_mutex_lock(&evm); for (Ev *q = evq; q; q = q->next) if (q->conn == conn) q->conn = 0; pthread_mutex_unlock(&evm);   /* it is freed later */
     pthread_mutex_lock(&s->m); Player *p = player_by_conn(s, conn);
     if (!p) { pthread_mutex_unlock(&s->m); return; }
     uint32_t id = p->dpnid, ctx = p->ctx; int created = p->created, leaving = p->leaving, accepted = p->indicated && p->dpnid; p->conn = 0;
@@ -561,6 +564,7 @@ static void server_closed(Sess *s, dp8_conn *conn, int reason)
 typedef struct EnumReq { Sess *s; dp8_ep *ep; struct sockaddr_in from; uint16_t payload; } EnumReq;
 static int post_enum_query(Ctx *c, Ev *e, uint32_t pm, uint32_t hr)
 {
+    __atomic_sub_fetch(&enum_events, 1, __ATOMIC_RELAXED);
     (void)c; Sess *s = e->s;
     obj_release(O(e->a[0])); obj_release(O(e->a[1])); gfree(e->a[2]);
     uint32_t rdata = rt_r32(G_MEM, pm + 24), rsize = rt_r32(G_MEM, pm + 28), rctx = rt_r32(G_MEM, pm + 32);
@@ -589,6 +593,8 @@ static void net_enum_query(void *ctx, dp8_ep *ep, const struct sockaddr_in *from
     if (n < 5 || !s->hosting) return;
     size_t data_at = 5;
     if (m[4] == 1) { if (n < 21 || memcmp(m + 5, s->app, 16)) return; data_at = 21; }
+    if (__atomic_load_n(&enum_events, __ATOMIC_RELAXED) >= MAX_ENUM_EVENTS) return;   /* a flood: the rest are dropped */
+    __atomic_add_fetch(&enum_events, 1, __ATOMIC_RELAXED);
     /* DPNMSG_ENUM_HOSTS_QUERY {pAddressSender, pAddressDevice, pvReceivedData, dwReceivedDataSize, dwMaxResponseDataSize,
      *                          pvResponseData, dwResponseDataSize, pvResponseContext} */
     Ev *e = new_event(s, M_ENUM_HOSTS_QUERY); e->addr = *from;
@@ -677,6 +683,7 @@ static void client_closed(Sess *s, dp8_conn *conn, int reason)
  * dwResponseDataSize, pvUserContext, dwRoundTripLatencyMS} */
 static int post_enum_response(Ctx *c, Ev *e, uint32_t pm, uint32_t hr)
 {
+    __atomic_sub_fetch(&enum_events, 1, __ATOMIC_RELAXED);
     (void)c; (void)pm; (void)hr;
     obj_release(O(e->a[0])); obj_release(O(e->a[1]));
     uint32_t ad = e->a[2]; gfree(rt_r32(G_MEM, ad + 48)); gfree(rt_r32(G_MEM, ad + 64)); gfree(ad); gfree(e->a[3]);
@@ -693,14 +700,18 @@ static void net_enum_response(void *ctx, dp8_ep *ep, const struct sockaddr_in *f
     uint32_t uctx = op ? op->ctx : 0, rtt = op ? dp8_tick() - op->last_tx : 0, devcopy = op ? addr_dup(op->device) : 0;
     pthread_mutex_unlock(&s->m);
     if (!op) return;
+    if (__atomic_load_n(&enum_events, __ATOMIC_RELAXED) >= MAX_ENUM_EVENTS) { obj_release(O(devcopy)); return; }
+    __atomic_add_fetch(&enum_events, 1, __ATOMIC_RELAXED);
     #define OFF(x) (rd32(r + (x)))
     size_t rlen = n - 4;
     Blob sn = {0}, ar = {0}, rd = {0};
-    if (OFF(24) && OFF(24) + OFF(28) <= rlen) { sn.p = (uint8_t *)r + OFF(24); sn.n = OFF(28); }
-    if (OFF(48) && OFF(48) + OFF(52) <= rlen) { ar.p = (uint8_t *)r + OFF(48); ar.n = OFF(52); }
-    if (OFF(0) && OFF(0) + OFF(4) <= rlen) { rd.p = (uint8_t *)r + OFF(0); rd.n = OFF(4); }
+    #define FITS(o, l) (OFF(o) && OFF(o) <= rlen && OFF(l) <= rlen - OFF(o))     /* no uint32 wrap: the sender is anyone */
+    if (FITS(24, 28)) { sn.p = (uint8_t *)r + OFF(24); sn.n = OFF(28); }
+    if (FITS(48, 52)) { ar.p = (uint8_t *)r + OFF(48); ar.n = OFF(52); }
+    if (FITS(0, 4)) { rd.p = (uint8_t *)r + OFF(0); rd.n = OFF(4); }
+    #undef FITS
     /* DPN_APPLICATION_DESC (72 bytes) */
-    uint32_t g = heap_alloc(w32_process_heap, 8, 72);
+    uint32_t g = heap_alloc(w32_process_heap, 8, 72); if (!g) { obj_release(O(devcopy)); __atomic_sub_fetch(&enum_events, 1, __ATOMIC_RELAXED); return; }
     rt_w32(G_MEM, g, 72); rt_w32(G_MEM, g + 4, OFF(12)); memcpy(GP(g + 8), r + 56, 16); memcpy(GP(g + 24), r + 72, 16);
     rt_w32(G_MEM, g + 40, OFF(16)); rt_w32(G_MEM, g + 44, OFF(20)); rt_w32(G_MEM, g + 48, gstr_w(&sn));
     if (ar.n) { rt_w32(G_MEM, g + 64, gcopy(ar.p, ar.n)); rt_w32(G_MEM, g + 68, ar.n); }
