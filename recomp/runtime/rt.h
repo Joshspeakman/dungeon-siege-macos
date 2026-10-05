@@ -124,9 +124,22 @@ static inline uint32_t flags_get(const LFs *f)
            (flag_cf(f) ? F_CF : 0) | (flag_pf(f) ? F_PF : 0) | (flag_af(f) ? F_AF : 0) |
            (flag_zf(f) ? F_ZF : 0) | (flag_sf(f) ? F_SF : 0) | (flag_of(f) ? F_OF : 0) | (f->df ? F_DF : 0);
 }
-static inline void flags_set(LFs *f, uint32_t v, uint32_t mask)
+/* flags that mask names take v's bits; the others keep their current values, computed only when they're kept (the
+ * mask is a constant at nearly every use, e.g. sahf after an x87 compare, so the others drop out when inlined) */
+static inline __attribute__((always_inline)) void flags_set(LFs *f, uint32_t v, uint32_t mask)
 {
-    uint32_t cur = flags_get(f);
+    uint32_t cur;
+    if ((f->op >> 2) == LF_EXPLICIT) cur = f->eflags;
+    else {
+        cur = f->eflags & ~(uint32_t)(F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF);
+        if (!(mask & F_CF) && flag_cf(f)) cur |= F_CF;
+        if (!(mask & F_PF) && flag_pf(f)) cur |= F_PF;
+        if (!(mask & F_AF) && flag_af(f)) cur |= F_AF;
+        if (!(mask & F_ZF) && flag_zf(f)) cur |= F_ZF;
+        if (!(mask & F_SF) && flag_sf(f)) cur |= F_SF;
+        if (!(mask & F_OF) && flag_of(f)) cur |= F_OF;
+    }
+    cur = (cur & ~(uint32_t)F_DF) | 2 | (f->df ? F_DF : 0);
     f->eflags = (cur & ~mask) | (v & mask); f->op = LF_EXPLICIT; f->df = (f->eflags & F_DF) != 0;
 }
 #define CC_O  flag_of(&f)
