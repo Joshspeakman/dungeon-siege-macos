@@ -26,7 +26,12 @@ struct DSRRenderer {
     uint32_t rt, ds;
     id<MTLCommandBuffer> cb, last_cb; id<MTLRenderCommandEncoder> enc; id<MTLBlitCommandEncoder> blit; uint32_t enc_rt, enc_ds, encoders; uint64_t cb_bytes;
     id<MTLBuffer> ring; uint32_t ring_off, ring_size; id<MTLBuffer> white;
-    NSMutableDictionary *pso, *dso, *samplers;
+    /* pipeline, depth and sampler states by key: open-addressing tables (keys never 0), no Objective-C boxing per draw */
+    uint64_t pso_k[1024]; id<MTLRenderPipelineState> pso_v[1024];
+    uint32_t dso_k[64]; id<MTLDepthStencilState> dso_v[64];
+    uint32_t smp_k[1024]; id<MTLSamplerState> smp_v[1024]; int pso_n, dso_n, smp_n; uint32_t pso_last;   // filled at most 3/4, then uncached
+    /* the current render encoder's state, so unchanged state isn't set again (cleared with each new encoder) */
+    struct { __unsafe_unretained id pso, dso, tex[2], smp[2]; int cull, ring_bound; MTLViewport vp; } es;
     id<MTLRenderPipelineState> quad_pso, quad_over_pso, zclear_pso, present_pso; id<MTLTexture> scratch, gamma_lut; uint16_t gamma[3][256]; int gamma_dirty; id<MTLDepthStencilState> zclear_ds, nodepth_ds;
     id<MTLSamplerState> point_clamp, linear_clamp; id<MTLTexture> dummy;
     uint32_t presented;
@@ -58,7 +63,6 @@ DSRRenderer *dsr_renderer_create(id<MTLDevice> dev)
     if (!r->lib) { fprintf(stderr, "shader compile failed: %s\n", err.localizedDescription.UTF8String); exit(1); }
     r->ring_size = 256u << 20; r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
     { uint32_t w = 0xffffffff; r->white = [dev newBufferWithBytes:&w length:16 options:MTLResourceStorageModeShared]; }
-    r->pso = [NSMutableDictionary new]; r->dso = [NSMutableDictionary new]; r->samplers = [NSMutableDictionary new];
     for (int k = 0; k < 32; k++) mat_ident(r->xf[k]);
     for (int k = 0; k < 256; k++) r->rs[k] = 0;
     r->rs[7] = 1; r->rs[14] = 1; r->rs[23] = 4; r->rs[22] = 3; r->rs[19] = 2; r->rs[20] = 1; r->rs[25] = 8;   // ZENABLE, ZWRITE, ZFUNC LEQUAL, CULL CCW, SRC ONE, DST ZERO, AFUNC ALWAYS
@@ -142,6 +146,8 @@ static id<MTLRenderCommandEncoder> enc_for(DSRRenderer *r, uint32_t rt, uint32_t
     p.colorAttachments[0].texture = c->tex; p.colorAttachments[0].loadAction = MTLLoadActionLoad; p.colorAttachments[0].storeAction = MTLStoreActionStore;
     if (z) { p.depthAttachment.texture = z->tex; p.depthAttachment.loadAction = MTLLoadActionLoad; p.depthAttachment.storeAction = MTLStoreActionStore; }
     r->enc = [cmdbuf(r) renderCommandEncoderWithDescriptor:p]; r->enc_rt = rt; r->enc_ds = z ? ds : 0; r->encoders++;
+    memset(&r->es, 0, sizeof r->es); r->es.cull = -1;
+    [r->enc setFrontFacingWinding:MTLWindingClockwise];   // same convention as D3D
     return r->enc;
 }
 
@@ -206,6 +212,7 @@ static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t sr
     [e setVertexBytes:&q length:sizeof q atIndex:0]; [e setFragmentBytes:&q length:sizeof q atIndex:0];
     [e setFragmentTexture:fill == 2 ? r->scratch : s ? s->tex : r->dummy atIndex:0]; [e setFragmentSamplerState:r->point_clamp atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    memset(&r->es, 0, sizeof r->es); r->es.cull = -1;   // the draw-state cache no longer matches the encoder
 }
 
 // ---------- fixed-function draws ----------
@@ -223,8 +230,12 @@ static MTLCompareFunction cmpf(uint32_t f)
 static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int has_depth)
 {
     uint32_t blend = r->rs[27] ? 1 : 0, sb = blend ? r->rs[19] : 2, db = blend ? r->rs[20] : 1;
-    NSNumber *key = @(((uint64_t)fvf << 32) | (blend << 16) | (sb << 8) | (db << 4) | has_depth);
-    id<MTLRenderPipelineState> p = r->pso[key]; if (p) return p;
+    uint64_t key = ((uint64_t)fvf << 32) | (blend << 16) | (sb << 8) | (db << 4) | (uint64_t)has_depth << 1 | 1;   // never 0
+    if (key == r->pso_k[r->pso_last]) return r->pso_v[r->pso_last];                                         // same as the last draw
+    uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 54);
+    while (r->pso_k[h] && r->pso_k[h] != key) h = (h + 1) & 1023;
+    if (r->pso_k[h]) { r->pso_last = h; return r->pso_v[h]; }
+    id<MTLRenderPipelineState> p;
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; NSError *err = nil;
     d.vertexFunction = [r->lib newFunctionWithName:@"vs_main"]; d.fragmentFunction = [r->lib newFunctionWithName:@"fs_main"];
     d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -246,27 +257,32 @@ static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int
     d.vertexDescriptor = v;
     p = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
     if (!p) { fprintf(stderr, "pipeline fvf %x: %s\n", fvf, err.localizedDescription.UTF8String); return nil; }
-    r->pso[key] = p; return p;
+    if (r->pso_n < 768) { r->pso_k[h] = key; r->pso_v[h] = p; r->pso_n++; r->pso_last = h; }   // the game uses a few dozen
+    return p;
 }
 static id<MTLDepthStencilState> depth_for(DSRRenderer *r)
 {
     uint32_t en = r->rs[7] ? 1 : 0, wr = en && r->rs[14] ? 1 : 0, fn = en ? r->rs[23] : 8;
-    NSNumber *key = @((en << 16) | (wr << 8) | fn);
-    id<MTLDepthStencilState> s = r->dso[key]; if (s) return s;
+    uint32_t key = (en << 16) | (wr << 8) | (fn << 1) | 1, h = (key * 2654435761u) >> 26;
+    while (r->dso_k[h] && r->dso_k[h] != key) h = (h + 1) & 63;
+    if (r->dso_k[h]) return r->dso_v[h];
+    id<MTLDepthStencilState> s;
     MTLDepthStencilDescriptor *d = [MTLDepthStencilDescriptor new]; d.depthCompareFunction = en ? cmpf(fn) : MTLCompareFunctionAlways; d.depthWriteEnabled = wr;
-    s = [r->dev newDepthStencilStateWithDescriptor:d]; r->dso[key] = s; return s;
+    s = [r->dev newDepthStencilStateWithDescriptor:d]; if (r->dso_n < 48) { r->dso_k[h] = key; r->dso_v[h] = s; r->dso_n++; } return s;
 }
 static id<MTLSamplerState> sampler_for(DSRRenderer *r, int st)
 {
     uint32_t au = r->tss[st][13], av = r->tss[st][14], mag = r->tss[st][16], min = r->tss[st][17], mip = r->tss[st][18];
-    NSNumber *key = @((au << 16) | (av << 12) | (mag << 8) | (min << 4) | mip);
-    id<MTLSamplerState> s = r->samplers[key]; if (s) return s;
+    uint32_t key = ((au << 16) | (av << 12) | (mag << 8) | (min << 4) | mip) << 1 | 1, h = (key * 2654435761u) >> 22;
+    while (r->smp_k[h] && r->smp_k[h] != key) h = (h + 1) & 1023;
+    if (r->smp_k[h]) return r->smp_v[h];
+    id<MTLSamplerState> s;
     MTLSamplerDescriptor *d = [MTLSamplerDescriptor new];
     MTLSamplerAddressMode (^am)(uint32_t) = ^MTLSamplerAddressMode(uint32_t a) { return a == 2 ? MTLSamplerAddressModeMirrorRepeat : a == 3 ? MTLSamplerAddressModeClampToEdge : a == 4 ? MTLSamplerAddressModeClampToBorderColor : MTLSamplerAddressModeRepeat; };
     d.sAddressMode = am(au); d.tAddressMode = am(av);
     d.magFilter = mag >= 2 ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest; d.minFilter = min >= 2 ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
     d.mipFilter = mip == 3 ? MTLSamplerMipFilterLinear : mip == 2 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterNotMipmapped;
-    s = [r->dev newSamplerStateWithDescriptor:d]; r->samplers[key] = s; return s;
+    s = [r->dev newSamplerStateWithDescriptor:d]; if (r->smp_n < 768) { r->smp_k[h] = key; r->smp_v[h] = s; r->smp_n++; } return s;
 }
 static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
@@ -274,7 +290,8 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     { int rhw = (fvf & 0xe) == 4; stride = rhw ? 16 : 12; if (fvf & 0x10) stride += 12; if (fvf & 0x40) stride += 4; if (fvf & 0x80) stride += 4;
       for (uint32_t n = (fvf >> 8) & 0xf, k = 0; k < n; k++) { uint32_t f = (fvf >> (16 + 2 * k)) & 3; stride += f == 0 ? 8 : f == 1 ? 12 : f == 2 ? 16 : 4; } }
     dsr_stat[0]++;
-    if (getenv("DSR_DRAWLOG")) {   /* each distinct kind of draw once (development) */
+    static int drawlog = -1; if (drawlog < 0) drawlog = getenv("DSR_DRAWLOG") != 0;
+    if (drawlog) {   /* each distinct kind of draw once (development) */
         static uint64_t seen[512]; static int ns;
         uint64_t key = ((uint64_t)prim << 56) ^ ((uint64_t)fvf << 24) ^ ((uint64_t)r->rs[27] << 20) ^ ((uint64_t)r->rs[19] << 12) ^ ((uint64_t)r->rs[20] << 8)
                      ^ ((uint64_t)r->tss[0][1] << 4) ^ (uint64_t)r->tss[1][1] ^ ((uint64_t)r->rs[15] << 40) ^ ((uint64_t)r->rs[14] << 44);
@@ -304,15 +321,25 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     Surf *t0 = surf(r, r->tex[0]), *t1 = surf(r, r->tex[1]);
     u.misc[0] = (fvf & 0xe) == 4; u.misc[1] = (fvf & 0x40) != 0; u.misc[2] = t0 != NULL; u.misc[3] = t1 != NULL;
     u.xrgb[0] = t0 && t0->fmt == 2; u.xrgb[1] = t1 && t1->fmt == 2;
-    [e setRenderPipelineState:pso]; [e setDepthStencilState:depth_for(r)];
+    uint32_t uoff; memcpy(ring_alloc(r, sizeof u, &uoff), &u, sizeof u);   // one copy, read by both stages
+    e = enc_for(r, r->rt, r->ds);                                         // (ring_alloc may have flushed)
+    id<MTLDepthStencilState> dso = depth_for(r);
+    if (r->es.pso != pso) { [e setRenderPipelineState:pso]; r->es.pso = pso; }
+    if (r->es.dso != dso) { [e setDepthStencilState:dso]; r->es.dso = dso; }
     uint32_t cull = r->rs[22];
-    [e setFrontFacingWinding:MTLWindingClockwise];   // same convention as D3D
-    [e setCullMode:cull == 2 ? MTLCullModeFront : cull == 3 ? MTLCullModeBack : MTLCullModeNone];   // D3DCULL_CW culls clockwise (= front here)
-    [e setViewport:(MTLViewport){r->vp[0], r->vp[1], u.vp[2], u.vp[3], r->vp[4], r->vp[5] ? r->vp[5] : 1}];
-    [e setVertexBuffer:r->ring offset:voff atIndex:0]; [e setVertexBuffer:r->white offset:0 atIndex:2];
-    [e setVertexBytes:&u length:sizeof u atIndex:1]; [e setFragmentBytes:&u length:sizeof u atIndex:1];
-    [e setFragmentTexture:t0 ? t0->tex : r->dummy atIndex:0]; [e setFragmentSamplerState:sampler_for(r, 0) atIndex:0];
-    [e setFragmentTexture:t1 ? t1->tex : r->dummy atIndex:1]; [e setFragmentSamplerState:sampler_for(r, 1) atIndex:1];
+    int cm = cull == 2 ? MTLCullModeFront : cull == 3 ? MTLCullModeBack : MTLCullModeNone;   // D3DCULL_CW culls clockwise (= front here)
+    if (r->es.cull != cm) { [e setCullMode:(MTLCullMode)cm]; r->es.cull = cm; }
+    MTLViewport vp = {r->vp[0], r->vp[1], u.vp[2], u.vp[3], r->vp[4], r->vp[5] ? r->vp[5] : 1};
+    if (memcmp(&vp, &r->es.vp, sizeof vp)) { [e setViewport:vp]; r->es.vp = vp; }
+    if (!r->es.ring_bound) {
+        [e setVertexBuffer:r->ring offset:voff atIndex:0]; [e setVertexBuffer:r->white offset:0 atIndex:2];
+        [e setVertexBuffer:r->ring offset:uoff atIndex:1]; [e setFragmentBuffer:r->ring offset:uoff atIndex:1]; r->es.ring_bound = 1;
+    } else { [e setVertexBufferOffset:voff atIndex:0]; [e setVertexBufferOffset:uoff atIndex:1]; [e setFragmentBufferOffset:uoff atIndex:1]; }
+    id<MTLTexture> x0 = t0 ? t0->tex : r->dummy, x1 = t1 ? t1->tex : r->dummy; id<MTLSamplerState> s0 = sampler_for(r, 0), s1 = sampler_for(r, 1);
+    if (r->es.tex[0] != x0) { [e setFragmentTexture:x0 atIndex:0]; r->es.tex[0] = x0; }
+    if (r->es.smp[0] != s0) { [e setFragmentSamplerState:s0 atIndex:0]; r->es.smp[0] = s0; }
+    if (r->es.tex[1] != x1) { [e setFragmentTexture:x1 atIndex:1]; r->es.tex[1] = x1; }
+    if (r->es.smp[1] != s1) { [e setFragmentSamplerState:s1 atIndex:1]; r->es.smp[1] = s1; }
     MTLPrimitiveType pt; uint32_t count = ni ? ni : nv;
     switch (prim) { case 1: pt = MTLPrimitiveTypePoint; break; case 2: pt = MTLPrimitiveTypeLine; break; case 3: pt = MTLPrimitiveTypeLineStrip; break;
                     case 5: pt = MTLPrimitiveTypeTriangleStrip; break; default: pt = MTLPrimitiveTypeTriangle; }
@@ -344,6 +371,7 @@ static void clear(DSRRenderer *r, const uint32_t *p)
         [e setRenderPipelineState:r->zclear_pso]; [e setDepthStencilState:r->zclear_ds]; [e setCullMode:MTLCullModeNone];
         [e setViewport:(MTLViewport){full[0], full[1], full[2] - full[0], full[3] - full[1], 0, 1}];
         [e setVertexBytes:zz length:16 atIndex:0]; [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        memset(&r->es, 0, sizeof r->es); r->es.cull = -1;
     }
 }
 
