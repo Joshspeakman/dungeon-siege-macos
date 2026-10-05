@@ -1036,6 +1036,7 @@ static void sv_GetClientAddress(Ctx *c)
     Obj *o = O(ARG(0)); Sess *s = o ? sess_of(o) : 0; if (!s) RET(DPNERR_INVALIDPARAM, 4);
     pthread_mutex_lock(&s->m); Player *p = player_by_id(s, ARG(1)); struct sockaddr_in a = p ? p->addr : (struct sockaddr_in){0}; pthread_mutex_unlock(&s->m);
     if (!p) RET(DPNERR_INVALIDPLAYER, 4);
+    LOG("GetClientAddress(%08x) -> %s:%u\n", ARG(1), inet_ntoa(a.sin_addr), ntohs(a.sin_port));
     rt_w32(G_MEM, ARG(2), address_object(&a)); RET(S_OK_, 4);
 }
 static void cs_GetApplicationDesc(Ctx *c)
