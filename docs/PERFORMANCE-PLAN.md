@@ -45,6 +45,15 @@ and 6, about 85% with step 5. A flat 120 on an M1 Pro: about 50%, limited mostly
   them: GPU time -13% (3.15 -> 2.75 ms), peaks 5.7 -> 4.1 ms; images identical.
 - **Hitches:** pipeline compiles measured at 0.2 ms or less with the system shader cache: not a hitch source, so no
   binary archive is needed.
+- **Game thread (step 6):** game-code CPU per frame in the forest benchmark ~6.0 -> ~3.4 ms:
+  - the host's rounding mode follows the game's x87 rounding control (the game mostly rounds toward zero), which made
+    the float rounding exact and removed per-operation corrections and library calls (`nextafterf`, `fesetround`);
+  - `flags_set` (after every x87 compare) computes only the flags it keeps and is inlined;
+  - the quaternion rotation at the heart of character animation (a quarter of the game thread) runs natively, 10x
+    cheaper, checked bit for bit against the original (`DS_NATIVE_CHECK=1`).
+  Every change was checked: random-operation tests against the hardware, the instruction fuzzer, the differential
+  check, and the multiplayer digest (still equal to the PC's). Next candidates: the rest of character skinning
+  (`0x693f6f`, `0x695c99`, slerp `0x694970`), or keeping the x87 stack in registers in the lifter.
 - **Defaults:** view distance starts at Very Far (200%) on Max and Ultra chips, Farther (150%) elsewhere; the frame
   rate already follows the display.
 
