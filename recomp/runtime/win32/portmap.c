@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
@@ -110,8 +111,8 @@ static int http(const char *url, const char *action, const char *body, char *out
                             "SOAPAction: \"%s#%s\"\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s", path, host, port, upnp_service, action, strlen(body), body);
     else rl = snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\n\r\n", path, host, port);
     if (rl <= 0 || send(s, req, (size_t)rl, 0) != rl) { close(s); return -1; }
-    size_t n = 0; ssize_t k;
-    while (n + 1 < cap && (k = recv(s, out + n, cap - 1 - n, 0)) > 0) n += (size_t)k;
+    size_t n = 0; ssize_t k; time_t until = time(0) + 5;       /* all of it within 5 s: a router that drips bytes can't stall the game */
+    while (n + 1 < cap && time(0) < until && (k = recv(s, out + n, cap - 1 - n, 0)) > 0) n += (size_t)k;
     out[n] = 0; close(s);
     return strstr(out, " 200 ") ? 0 : -1;
 }
