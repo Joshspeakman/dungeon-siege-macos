@@ -210,7 +210,10 @@ cat > "$A/Contents/Info.plist" <<PLIST
 PLIST
 I="$(mktemp -d)"
 if python3 "$HERE/recomp/tools/extract_icon.py" "$EXE" "$I/ds.ico" 2>/dev/null && sips -s format png "$I/ds.ico" --out "$I/ds.png" >/dev/null 2>&1; then
-  sips -z 512 512 "$I/ds.png" --out "$I/ds512.png" >/dev/null && sips -s format icns "$I/ds512.png" --out "$A/Contents/Resources/icon.icns" >/dev/null 2>&1 || true
+  sips -z 512 512 "$I/ds.png" --out "$I/ds512.png" >/dev/null
+  if [ -n "$AS_NIGHTLY" ] && clang -fobjc-arc -framework AppKit "$HERE/recomp/tools/nightly_icon.m" -o "$I/nightly_icon" 2>/dev/null \
+     && "$I/nightly_icon" "$I/ds512.png" "$I/n.png" && sips -z 512 512 "$I/n.png" --out "$I/ds512.png" >/dev/null; then :; fi   # dark tile, NIGHTLY band
+  sips -s format icns "$I/ds512.png" --out "$A/Contents/Resources/icon.icns" >/dev/null 2>&1 || true
 fi
 rm -rf "$I"
 codesign --force --deep --sign - "$A" >/dev/null 2>&1 || true
