@@ -359,13 +359,38 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     } else if (ni) [e drawIndexedPrimitives:pt indexCount:ni indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ioff];
     else [e drawPrimitives:pt vertexStart:0 vertexCount:nv];
 }
-static void clear(DSRRenderer *r, const uint32_t *p)
+static void clear_rect(DSRRenderer *r, uint32_t flags, uint32_t color, float z, const int32_t *rc, int has_ds)
+{
+    if (flags & 1) quad(r, r->rt, rc, 0, rc, 1, color);                          // D3DCLEAR_TARGET
+    if ((flags & 2) && has_ds) {                                                // D3DCLEAR_ZBUFFER
+        id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); float zz[4] = {z, 0, 0, 0};
+        [e setRenderPipelineState:r->zclear_pso]; [e setDepthStencilState:r->zclear_ds]; [e setCullMode:MTLCullModeNone];
+        [e setViewport:(MTLViewport){rc[0], rc[1], rc[2] - rc[0], rc[3] - rc[1], 0, 1}];
+        [e setVertexBytes:zz length:16 atIndex:0]; [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        memset(&r->es, 0, sizeof r->es); r->es.cull = -1;
+    }
+}
+
+static void clear(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t flags = p[0], color = p[1]; float z; memcpy(&z, &p[2], 4);
     Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) return;
     if (dsr_verbose) fprintf(stderr, "clear flags %x color %08x rt %u (%ux%u fmt %u usage %lx) ds %u vp %.0f %.0f %.0f %.0f\n", flags, color, r->rt, rt->w, rt->h, rt->fmt, (unsigned long)rt->tex.usage, r->ds, r->vp[0], r->vp[1], r->vp[2], r->vp[3]);
     int32_t full[4] = {(int32_t)r->vp[0], (int32_t)r->vp[1], (int32_t)(r->vp[0] + (r->vp[2] ? r->vp[2] : rt->w)), (int32_t)(r->vp[1] + (r->vp[3] ? r->vp[3] : rt->h))};
-    if (flags & 1) quad(r, r->rt, full, 0, full, 1, color);                      // D3DCLEAR_TARGET
+    full[0] = full[0] > 0 ? full[0] : 0; full[1] = full[1] > 0 ? full[1] : 0;
+    full[2] = full[2] < (int32_t)rt->w ? full[2] : (int32_t)rt->w; full[3] = full[3] < (int32_t)rt->h ? full[3] : (int32_t)rt->h;
+    // D3D clears only the given rects (each clipped to the viewport), or the whole viewport when there are none. The game
+    // relies on it: the inventory's paper doll is kept inside its box by clearing depth to 0 everywhere, then to 1 in the
+    // box, before drawing the doll.
+    uint32_t nr = size >= 20 ? p[4] : 0; if (nr > (size - 20) / 16) nr = 0;
+    for (uint32_t k = 0; k < (nr ? nr : 1); k++) {
+        int32_t rc[4]; memcpy(rc, nr ? (const int32_t *)(p + 5 + 4 * k) : full, 16);
+        if (rc[0] < full[0]) rc[0] = full[0];
+        if (rc[1] < full[1]) rc[1] = full[1];
+        if (rc[2] > full[2]) rc[2] = full[2];
+        if (rc[3] > full[3]) rc[3] = full[3];
+        if (rc[2] > rc[0] && rc[3] > rc[1]) clear_rect(r, flags, color, z, rc, ds != 0);
+    }
     if (getenv("DSR_CHECKCLEAR")) {
         static int n; if (n++ < 4) {
             id<MTLBuffer> b = [r->dev newBufferWithLength:4 options:MTLResourceStorageModeShared]; end_enc(r);
@@ -373,13 +398,6 @@ static void clear(DSRRenderer *r, const uint32_t *p)
             [be copyFromTexture:rt->tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(100, 100, 0) sourceSize:MTLSizeMake(1, 1, 1) toBuffer:b destinationOffset:0 destinationBytesPerRow:4 destinationBytesPerImage:4];
             [be endEncoding]; dsr_renderer_flush(r, 1);
             fprintf(stderr, "after clear %d: px %08x, cb status %ld err %s\n", n, *(uint32_t *)b.contents, (long)r->last_cb.status, r->last_cb.error.localizedDescription.UTF8String ?: "-"); } }
-    if ((flags & 2) && ds) {                                                    // D3DCLEAR_ZBUFFER
-        id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); float zz[4] = {z, 0, 0, 0};
-        [e setRenderPipelineState:r->zclear_pso]; [e setDepthStencilState:r->zclear_ds]; [e setCullMode:MTLCullModeNone];
-        [e setViewport:(MTLViewport){full[0], full[1], full[2] - full[0], full[3] - full[1], 0, 1}];
-        [e setVertexBytes:zz length:16 atIndex:0]; [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-        memset(&r->es, 0, sizeof r->es); r->es.cull = -1;
-    }
 }
 
 void dsr_renderer_flush(DSRRenderer *r, int wait)
@@ -458,7 +476,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_TEXTURE: if (p[0] < 8) r->tex[p[0]] = p[1]; break;
     case DSR_TRANSFORM: if (p[0] < 32) memcpy(r->xf[p[0]], p + 1, 64); break;
     case DSR_VIEWPORT: r->vp[0] = p[0]; r->vp[1] = p[1]; r->vp[2] = p[2]; r->vp[3] = p[3]; memcpy(&r->vp[4], p + 4, 8); break;
-    case DSR_CLEAR: clear(r, p); break;
+    case DSR_CLEAR: clear(r, p, size); break;
     case DSR_DRAW: draw(r, p, size); break;
     case DSR_SET_RT: r->rt = p[0]; r->ds = p[1]; break;
     case DSR_SURFACE_CREATE: surface_create(r, p, size); break;
