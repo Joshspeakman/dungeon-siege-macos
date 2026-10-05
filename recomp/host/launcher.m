@@ -500,6 +500,104 @@ static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode, 
     else setenv("DSR_FPSCAP", fps.UTF8String, 1);
 }
 
+// ---------------------------------------------------------------- updates
+/* install.sh gives each app an updater (Contents/MacOS/update, passed in DS_UPDATER): it fetches the branch the app
+ * follows (main, or nightly for Nightly) from GitHub into a worktree of the checkout the app was installed from and
+ * rebuilds the app from it, keeping the game folder, saves, settings and mods. The launcher asks GitHub (in the
+ * background, each time it opens) whether that branch moved past the commit the app was built from. */
+enum { UPD_NONE, UPD_CHECKING, UPD_CURRENT, UPD_AVAILABLE, UPD_ERROR };
+static void on_main(dispatch_block_t b) { CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, b); CFRunLoopWakeUp(CFRunLoopGetMain()); }
+static NSString *short_commit(NSString *c) { return c.length > 7 ? [c substringToIndex:7] : (c ?: @""); }
+static NSString *update_check(NSString *updater)   /* the newest commit of the branch on GitHub; nil if it can't be reached */
+{
+    NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:@"/bin/bash"]; t.arguments = @[updater, @"--check"];
+    NSPipe *p = [NSPipe pipe]; t.standardOutput = p; t.standardError = [NSFileHandle fileHandleWithNullDevice];
+    if (![t launchAndReturnError:nil]) return nil;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_global_queue(0, 0), ^{ if (t.running) [t terminate]; });
+    NSData *d = [p.fileHandleForReading readDataToEndOfFile]; [t waitUntilExit];
+    NSString *out = [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return t.terminationStatus == 0 && out.length >= 40 ? [out substringToIndex:40] : nil;
+}
+static NSArray<NSDictionary *> *update_choice(int state, NSString *branch, NSString *built, NSString *latest)
+{
+    NSString *label = @"Not available", *note = @"This copy wasn't installed from the GitHub repository";
+    switch (state) {
+    case UPD_CHECKING: label = @"Checking..."; note = [NSString stringWithFormat:@"Asking GitHub for the newest %@", branch]; break;
+    case UPD_CURRENT: label = @"Up to date"; note = [NSString stringWithFormat:@"%@ %@", branch, short_commit(built)]; break;
+    case UPD_AVAILABLE: label = @"Update available"; note = [NSString stringWithFormat:@"%@ -> %@: press to install", short_commit(built), short_commit(latest)]; break;
+    case UPD_ERROR: label = @"Couldn't check"; note = @"GitHub unreachable or not signed in: press to retry"; break;
+    }
+    return @[@{@"value": @"", @"label": label, @"note": note}];
+}
+/* the phase of install.sh's output, in words */
+static NSString *update_phase(NSString *line, NSString *branch)
+{
+    if ([line hasPrefix:@"== fetching"]) return @"Downloading the update from GitHub";
+    if ([line hasPrefix:[NSString stringWithFormat:@"== %@:", branch]]) return [@"Got " stringByAppendingString:[line substringFromIndex:branch.length + 4]];
+    if ([line hasPrefix:@"== analysis"]) return @"Rebuilding from your game: analysing its code (1 of 4)";
+    if ([line hasPrefix:@"== lifting"]) return @"Rebuilding from your game: translating to native code (2 of 4)";
+    if ([line hasPrefix:@"== compiling"]) return @"Rebuilding from your game: compiling (3 of 4)";
+    if ([line hasPrefix:@"== installing"]) return @"Installing the new app (4 of 4)";
+    return nil;
+}
+/* runs the updater with a progress window (modal); returns YES when the app was rebuilt */
+static BOOL update_run(NSWindow *parent, NSString *updater, NSString *branch, NSString *logPath)
+{
+    NSPanel *pn = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 520, 170) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+    pn.title = @"Updating";
+    NSTextField *title = [NSTextField labelWithString:@"Updating to the newest version"]; title.font = [NSFont boldSystemFontOfSize:14]; title.frame = NSMakeRect(20, 128, 480, 22);
+    NSTextField *status = [NSTextField wrappingLabelWithString:@"Starting..."]; status.frame = NSMakeRect(20, 64, 480, 56);
+    NSProgressIndicator *spin = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 44, 480, 12)]; spin.indeterminate = YES; [spin startAnimation:nil];
+    NSTextField *time = [NSTextField labelWithString:@"This takes a few minutes. Your saves, settings and mods are kept."]; time.font = [NSFont systemFontOfSize:11]; time.textColor = NSColor.secondaryLabelColor; time.frame = NSMakeRect(20, 14, 360, 18);
+    NSButton *btn = [NSButton buttonWithTitle:@"Close" target:nil action:nil]; btn.frame = NSMakeRect(400, 8, 100, 30); btn.hidden = YES;
+    for (NSView *x in @[title, status, spin, time, btn]) [pn.contentView addSubview:x];
+    if (parent) [pn setFrameOrigin:NSMakePoint(NSMidX(parent.frame) - 260, NSMidY(parent.frame) - 85)]; else [pn center];
+    [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];
+    NSFileHandle *log = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:@"/bin/bash"]; t.arguments = @[updater];
+    NSPipe *pipe = [NSPipe pipe]; t.standardOutput = pipe; t.standardError = pipe;
+    NSMutableString *pending = [NSMutableString new], *tail = [NSMutableString new];
+    pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *h) {
+        NSData *d = h.availableData; if (!d.length) return;
+        [log writeData:d];
+        NSString *chunk = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";
+        @synchronized (pending) {
+            [pending appendString:chunk];
+            NSRange nl;
+            while ((nl = [pending rangeOfString:@"\n"]).location != NSNotFound) {
+                NSString *line = [pending substringToIndex:nl.location]; [pending deleteCharactersInRange:NSMakeRange(0, nl.location + 1)];
+                [tail appendFormat:@"%@\n", line]; if (tail.length > 600) [tail deleteCharactersInRange:NSMakeRange(0, tail.length - 600)];
+                NSString *ph = update_phase(line, branch);
+                if (ph) on_main(^{ status.stringValue = ph; });
+            }
+        }
+    };
+    __block BOOL ok = NO;
+    __attribute__((objc_precise_lifetime)) DSBlockTarget *bt = [DSBlockTarget new];   /* a button's target is weak: kept here */
+    bt.fire = ^(NSInteger tag) { (void)tag; [NSApp stopModal]; };
+    btn.target = bt; btn.action = @selector(clicked:);
+    t.terminationHandler = ^(NSTask *task) {
+        int code = task.terminationStatus;
+        on_main(^{
+            pipe.fileHandleForReading.readabilityHandler = nil; [log closeFile];
+            [spin stopAnimation:nil]; spin.hidden = YES; btn.hidden = NO;
+            if (code == 0) { ok = YES; title.stringValue = @"Updated"; status.stringValue = @"The new version is installed. The app restarts when you press Restart."; btn.title = @"Restart"; }
+            else {
+                NSString *last; @synchronized (pending) { last = [[tail componentsSeparatedByString:@"\n"] componentsJoinedByString:@" "]; }
+                title.stringValue = @"The update didn't finish";
+                status.stringValue = [NSString stringWithFormat:@"Nothing was changed if it stopped before installing. Details: %@  (%@)", logPath,
+                                      last.length > 160 ? [last substringFromIndex:last.length - 160] : last];
+                time.stringValue = @"";
+            }
+        });
+    };
+    if (![t launchAndReturnError:nil]) { [log closeFile]; return NO; }
+    [pn makeKeyAndOrderFront:nil];
+    [NSApp runModalForWindow:pn];
+    [pn orderOut:nil];
+    return ok;
+}
+
 /* Shows the launch window (modal) unless DS_NO_LAUNCHER is set; returns 0 to quit. DS_LAUNCHER_SHOT=<png> renders it
  * to an image instead (development). */
 int ds_launcher_run(const char *game_dir, const char *data_dir)
@@ -522,9 +620,46 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         return 1;
     }
 
-    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700)];
-    v.rows = @[mode, mods, res, dist, fps]; v.hover = v.pressed = HIT_NONE;
-    __weak DSLaunchView *wv = v;
+    NSString *updater = getenv("DS_UPDATER") ? @(getenv("DS_UPDATER")) : nil, *branch = getenv("DS_UPDATE_BRANCH") ? @(getenv("DS_UPDATE_BRANCH")) : @"main";
+    NSString *built = getenv("DS_BUILT_COMMIT") ? @(getenv("DS_BUILT_COMMIT")) : @"";
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:updater ?: @""]) updater = nil;
+    DSRow *upd = [DSRow new]; upd.title = @"Updates";
+    __block int ustate = updater ? UPD_CHECKING : UPD_NONE; __block NSString *latest = nil;
+    upd.choices = update_choice(ustate, branch, built, nil);
+    BOOL shotMode = shot != NULL;
+    NSArray<DSRow *> *rows = @[mode, mods, res, dist, fps, upd];
+    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700 + 74 * (NSInteger)(rows.count - 5))];
+    v.rows = rows; v.hover = v.pressed = HIT_NONE;
+    __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
+    void (^check)(void) = ^{
+        if (!updater) return;
+        ustate = UPD_CHECKING; wu.choices = update_choice(ustate, branch, built, nil); wv.needsDisplay = YES;
+        void (^done)(NSString *) = ^(NSString *l) {
+            latest = l; ustate = !l ? UPD_ERROR : [l isEqualToString:built] ? UPD_CURRENT : UPD_AVAILABLE;
+            wu.choices = update_choice(ustate, branch, built, l); wv.needsDisplay = YES;
+        };
+        if (shotMode) { done(update_check(updater)); return; }               /* development: the result in the image */
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ NSString *l = update_check(updater); on_main(^{ done(l); }); });
+    };
+    check();
+    upd.activate = ^{
+        if (ustate == UPD_CHECKING) return;
+        if (ustate != UPD_AVAILABLE) { check(); return; }
+        NSAlert *a = [NSAlert new];
+        a.messageText = [NSString stringWithFormat:@"Update to the newest %@?", [branch isEqualToString:@"nightly"] ? @"Nightly" : @"version"];
+        a.informativeText = [NSString stringWithFormat:@"The %@ branch (%@) is downloaded from GitHub and the app is rebuilt from your own copy of the game, "
+                             "which takes a few minutes. Your game folder, saves, settings and mods are kept. The app restarts when it is done.", branch, short_commit(latest)];
+        [a addButtonWithTitle:@"Update"]; [a addButtonWithTitle:@"Cancel"];
+        if ([a runModal] != NSAlertFirstButtonReturn) return;
+        NSString *logPath = [data stringByAppendingPathComponent:@"update.log"];
+        if (update_run(wv.window, updater, branch, logPath)) {   /* restart: the new app, then this one ends */
+            NSString *app = [[[updater stringByDeletingLastPathComponent] stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
+            NSTask *o = [NSTask new]; o.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"]; o.arguments = @[@"-n", app];
+            [o launchAndReturnError:nil]; [o waitUntilExit];
+            exit(0);
+        }
+        check();
+    };
     v.onChange = ^{ mods.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa()); };   /* the Game row decides which set */
     __weak DSRow *wm = mods;
     mods.activate = ^{
