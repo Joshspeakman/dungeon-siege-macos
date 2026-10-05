@@ -24,6 +24,8 @@ troubleshooting.
 - **Multiplayer** on LAN and over the internet, compatible with DirectPlay on Windows, plus the Yesterhaven map.
 - **Legends of Aranna**, the expansion, from your own copy's data (`./install.sh --expansion <folder>`).
 - **Built-in view distance** from the original up to 300%, without mods (150% matches the community SeeFar mod).
+- **Best graphics by default:** a new installation starts with all complex shadows and trilinear filtering (the
+  2002 game picks lower settings for any video card newer than its hardware table); choices in Options still apply.
 - **The game's own sound system** (Miles), recompiled as well, playing through Core Audio.
 - Mouse, trackpad and keyboard, saving and loading, the full single-player campaign.
 - **Crash and freeze reports** in `~/Games/DungeonSiegeNative/CrashReports`, so problems can be diagnosed.

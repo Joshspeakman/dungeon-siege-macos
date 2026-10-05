@@ -8,6 +8,7 @@
  * Fog distances scale with the setting, and every mood gets a world frustum of the game's default 45 x 60 m times the setting (the
  * frustum is the part of the world kept loaded and drawn; the SeeFar mod uses 72 x 96 m, about 160%). */
 #include "w32.h"
+#include "ext.h"
 
 float w32_draw_distance = 1.0f;
 
@@ -100,6 +101,20 @@ int rt_override(Ctx *c, uint32_t addr)
             fputc('\n', f); fflush(f);
         }
         return 0;
+    }
+    if (addr == 0x4b7d69u) {                      /* the default Shadows setting (config/options.gas), every startup */
+        /* The game's shipped default is complex_party (complex shadows for the party only, simple for everything else),
+         * chosen for 2002 hardware, and its hardware table (system_detail.gas) would have left a card it doesn't know at
+         * Simple anyway. Every Mac draws all complex shadows easily, so the default here is All Complex; a choice saved
+         * in the preferences is applied over it right after, as before. DS_STOCK_SHADOWS=1 keeps the game's default. */
+        uint32_t world = rt_r32(G_MEM, 0x7a05fcu), sh = world ? rt_r32(G_MEM, world + 0xa8u) : 0;
+        uint32_t rend = rt_r32(G_MEM, 0x7a0644u); rend = rend ? rt_r32(G_MEM, rend + 0x1e0u) : 0;
+        if (getenv("DS_STOCK_SHADOWS") || !sh || !rend || !rt_r8(G_MEM, rend + 0x61bu)) return 0;   /* +0x61b: full rendering */
+        rt_w8(G_MEM, sh + 0x09u, 1); rt_w8(G_MEM, sh + 0x0au, 1);          /* shadows on */
+        rt_w8(G_MEM, sh + 0x13u, 1); rt_w8(G_MEM, sh + 0x14u, 0);          /* complex for everything (not the party only) */
+        uint32_t ebx = c->ebx, esi = c->esi, edi = c->edi, ebp = c->ebp;
+        ext_thiscall(c, 0x53e6bau, rt_r32(G_MEM, 0x7a05c8u), 0, 0);        /* what the original does after a change */
+        c->ebx = ebx; c->esi = esi; c->edi = edi; c->ebp = ebp; c->esp += 4; return 1;
     }
     if (addr == 0x412d12u) return loa_override(c, addr);       /* DS_REPORTLOG: the engine's reports, in any game */
     return loa_active ? loa_override(c, addr) : 0;
