@@ -87,10 +87,13 @@ typedef struct { int type; void *p; } Obj;
 static Obj objs[65536]; static uint32_t nobjs = 1;
 static pthread_mutex_t obj_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t vt[8];                          /* guest vtable per interface type */
+static uint32_t free_slot[65536], nfree_slot;   /* released slots, reused only once all have been handed out */
 static uint32_t make_iface(int type, void *p)
 {
     pthread_mutex_lock(&obj_lock);
-    uint32_t k = nobjs < 65536 ? nobjs++ : 0;   /* ids are never reused: stale pointers stay detectable */
+    /* new ids while there are any (stale pointers stay detectable), then the released ones: a long session must not
+     * run out (every surface takes two) */
+    uint32_t k = nobjs < 65536 ? nobjs++ : nfree_slot ? free_slot[--nfree_slot] : 0;
     objs[k].type = type; objs[k].p = p;
     pthread_mutex_unlock(&obj_lock);
     uint32_t g = heap_alloc(w32_process_heap, 8, 16);
@@ -103,10 +106,26 @@ static void *obj(uint32_t g, int type)
     uint32_t k = rt_r32(G_MEM, g + 4);
     return (k < 65536 && objs[k].type == type) ? objs[k].p : 0;
 }
+static void obj_drop(uint32_t g)                 /* an interface's object is gone */
+{
+    uint32_t k = g ? rt_r32(G_MEM, g + 4) : 0;
+    pthread_mutex_lock(&obj_lock);
+    if (k && k < 65536 && objs[k].type) { objs[k].type = 0; objs[k].p = 0; free_slot[nfree_slot++] = k; }
+    pthread_mutex_unlock(&obj_lock);
+}
 #define ME(T, ty) T *me = obj(ARG(0), ty); if (!me) { fprintf(stderr, "dsr: bad " #T " %08x\n", ARG(0)); RET(DDERR_INVALIDPARAMS, nargs_); }
 
-static uint32_t obj_ids;
-static uint32_t next_object_id(void) { return __atomic_add_fetch(&obj_ids, 1, __ATOMIC_SEQ_CST); }
+static uint32_t obj_ids, free_sid[65536], nfree_sid;      /* the renderer's surface ids: new ones, then released ones */
+static pthread_mutex_t sid_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t next_object_id(void)
+{
+    pthread_mutex_lock(&sid_lock); uint32_t id = obj_ids < 65535 ? ++obj_ids : nfree_sid ? free_sid[--nfree_sid] : 0; pthread_mutex_unlock(&sid_lock);
+    return id;                                  /* 0 (all in use): the renderer ignores the surface */
+}
+static void surface_id_free(uint32_t id)        /* after its DSR_SURFACE_DESTROY, so a reuse comes later in the stream */
+{
+    pthread_mutex_lock(&sid_lock); if (id && id < 65536 && nfree_sid < 65536) free_sid[nfree_sid++] = id; pthread_mutex_unlock(&sid_lock);
+}
 static uint32_t fvf_stride(uint32_t fvf)
 {
     uint32_t s = 0, n;
@@ -130,9 +149,16 @@ static uint32_t dsr_readbacks, dsr_uploads;
 void dsr_attach_consumer(DsrShmHeader *h) { shm = h; shm_ring = (uint8_t *)h + DSR_HEADER_SIZE; wpos = h->write_pos; }
 static int ring_space(uint32_t n) { return DSR_RING_SIZE - (wpos - __atomic_load_n(&shm->read_pos, __ATOMIC_ACQUIRE)) >= n; }
 static void wait_space(uint32_t n) { while (!ring_space(n)) usleep(100); }
+static int cmd_drop; static uint8_t *drop_buf; static size_t drop_cap;
 static uint32_t *cmd_begin(uint32_t op, uint32_t payload)
 {
     pthread_mutex_lock(&cmd_lock);
+    if (payload > DSR_RING_SIZE / 2) {          /* larger than the ring takes: written aside and dropped (a wait would never end) */
+        static int warned; if (!warned++) fprintf(stderr, "dsr: a %u-byte record (op %u) is too large for the command ring; dropped\n", payload, op);
+        if (drop_cap < 8 + (size_t)payload) { free(drop_buf); drop_cap = 8 + (size_t)payload; drop_buf = malloc(drop_cap); }
+        if (!drop_buf) abort();
+        cmd_drop = 1; cur = drop_buf; uint32_t *h = (uint32_t *)cur; h[0] = op; h[1] = payload; return h + 2;
+    }
     payload = (payload + 3) & ~3u; cur_size = 8 + payload;
     if (shm) {
         uint32_t off = wpos % DSR_RING_SIZE;
@@ -153,6 +179,7 @@ static uint32_t *cmd_begin(uint32_t op, uint32_t payload)
 static uint32_t st_ops[32];                         /* DSR_STATS=1: per-second counts of each record type */
 static void cmd_end(void)
 {
+    if (cmd_drop) { cmd_drop = 0; pthread_mutex_unlock(&cmd_lock); return; }
     uint32_t op = *(uint32_t *)cur;
     if (op < 32) st_ops[op]++;
     if (op == DSR_SURFACE_UPLOAD || op == DSR_UPLOAD_OVER) dsr_uploads++;
@@ -220,8 +247,14 @@ static int cmd_readback(uint32_t id, const int32_t *r, uint8_t *dst, uint32_t pi
     uint32_t w = (uint32_t)(r[2] - r[0]), h = (uint32_t)(r[3] - r[1]), row = w * bpp; int ok = 0;
     if (!shm || !w || !h || row * h > DSR_READBACK_SIZE) return 0;
     pthread_mutex_lock(&rb_lock);
-    uint32_t *p = cmd_begin(DSR_READBACK, 24); p[0] = id; p[1] = (uint32_t)r[0]; p[2] = (uint32_t)r[1]; p[3] = w; p[4] = h; p[5] = ++rb_cookie; cmd_end();
-    for (uint64_t t0 = now_us(); now_us() - t0 < 3000000; ) { if (__atomic_load_n(&shm->readback_done, __ATOMIC_ACQUIRE) == rb_cookie) { ok = 1; break; } usleep(50); }
+    rb_cookie = (rb_cookie + 1) & 0x7fffffffu;   /* the renderer sets the high bit when it could not do it */
+    uint32_t *p = cmd_begin(DSR_READBACK, 24); p[0] = id; p[1] = (uint32_t)r[0]; p[2] = (uint32_t)r[1]; p[3] = w; p[4] = h; p[5] = rb_cookie; cmd_end();
+    for (uint64_t t0 = now_us(); now_us() - t0 < 3000000; ) {
+        uint32_t d = __atomic_load_n(&shm->readback_done, __ATOMIC_ACQUIRE);
+        if (d == rb_cookie) { ok = 1; break; }
+        if (d == (rb_cookie | 0x80000000u)) break;
+        usleep(50);
+    }
     dsr_readbacks++;
     if (ok) { const uint8_t *src = (const uint8_t *)shm + DSR_READBACK_OFFSET; for (uint32_t y = 0; y < h; y++) memcpy(dst + y * pitch, src + y * row, row); }
     pthread_mutex_unlock(&rb_lock);
@@ -269,6 +302,7 @@ static uint32_t surface_create(DDraw *dd, const uint8_t *sd, DSurface **out)
 {
     uint32_t caps = U32(sd, SD_CAPS), caps2 = U32(sd, SD_CAPS2), w = U32(sd, SD_WIDTH), h = U32(sd, SD_HEIGHT), fl = U32(sd, SD_FLAGS);
     DSurface *s;
+    if (!(caps & DDSCAPS_PRIMARYSURFACE) && (w > 16384 || h > 16384)) return DDERR_INVALIDPARAMS;
     if (caps & DDSCAPS_PRIMARYSURFACE) {
         uint32_t nback = (fl & DDSD_BACKBUFFERCOUNT) ? U32(sd, SD_BACKBUFFERS) : 0;
         w = dd->mode_w; h = dd->mode_h;
@@ -313,7 +347,7 @@ static void surface_destroy(DSurface *s)
     uint32_t *p = cmd_begin(DSR_SURFACE_DESTROY, 4); p[0] = s->id; cmd_end();
     uint32_t bytes = (uint32_t)s->pitch * U32(s->desc, SD_HEIGHT) + 16;
     if (bytes >= 0x10000) vm_free(s->mem, 0, 0x8000); else heap_free(w32_process_heap, s->mem);
-    objs[rt_r32(G_MEM, s->g_surf + 4)].type = 0; objs[rt_r32(G_MEM, s->g_gamma + 4)].type = 0;
+    obj_drop(s->g_surf); obj_drop(s->g_gamma); surface_id_free(s->id);
     free(s);
 }
 static uint32_t surf_addref(DSurface *s) { return (uint32_t)__atomic_add_fetch(&s->ref, 1, __ATOMIC_SEQ_CST); }
@@ -429,7 +463,11 @@ END
 /* lock */
 M(s_Lock, 5) ME(DSurface, O_SURF)
     uint32_t r = ARG(1), sd = ARG(2), flags = ARG(3), bpp = bpp_of(me->desc) / 8; int32_t rr[4];
-    if (r) memcpy(rr, GP(r), 16);
+    if (r) {
+        memcpy(rr, GP(r), 16);
+        if (rr[0] < 0 || rr[1] < 0 || rr[2] <= rr[0] || rr[3] <= rr[1] || (uint32_t)rr[2] > U32(me->desc, SD_WIDTH) || (uint32_t)rr[3] > U32(me->desc, SD_HEIGHT))
+            RET(DDH(150), 5);                         /* DDERR_INVALIDRECT */
+    }
     if (sd) {
         uint32_t sz = rt_r32(G_MEM, sd);
         memcpy(GP(sd), me->desc, SD_BYTES); rt_w32(G_MEM, sd, sz ? sz : SD_BYTES);
@@ -459,12 +497,15 @@ M(s_Unlock, 2) ME(DSurface, O_SURF)
     if (!(me->lock_flags & DDLOCK_READONLY) && !(U32(me->desc, SD_CAPS) & DDSCAPS_ZBUFFER)) {
         int32_t u[4]; uint32_t bpp = bpp_of(me->desc) / 8;
         if (me->lock_has_rect) memcpy(u, me->lock_rect, 16); else { u[0] = 0; u[1] = 0; u[2] = (int32_t)U32(me->desc, SD_WIDTH); u[3] = (int32_t)U32(me->desc, SD_HEIGHT); }
-        uint32_t rowb = (uint32_t)(u[2] - u[0]) * bpp;
-        uint32_t *p = cmd_begin(me->upload_over ? DSR_UPLOAD_OVER : DSR_SURFACE_UPLOAD, 24 + rowb * (uint32_t)(u[3] - u[1]));
-        p[0] = me->id; p[1] = (uint32_t)u[0]; p[2] = (uint32_t)u[1]; p[3] = (uint32_t)(u[2] - u[0]); p[4] = (uint32_t)(u[3] - u[1]); p[5] = rowb;
-        uint8_t *dst = (uint8_t *)(p + 6);
-        for (int32_t y = u[1]; y < u[3]; y++, dst += rowb) memcpy(dst, G_MEM + me->mem + (uint32_t)y * (uint32_t)me->pitch + (uint32_t)u[0] * bpp, rowb);
-        cmd_end();
+        uint32_t rowb = (uint32_t)(u[2] - u[0]) * bpp, band = rowb ? (8u << 20) / rowb : 1; if (!band) band = 1;
+        for (int32_t y0 = u[1]; y0 < u[3]; y0 += (int32_t)band) {     /* in bands of at most 8 MB: a big texture fits the ring */
+            int32_t y1 = y0 + (int32_t)band < u[3] ? y0 + (int32_t)band : u[3];
+            uint32_t *p = cmd_begin(me->upload_over ? DSR_UPLOAD_OVER : DSR_SURFACE_UPLOAD, 24 + rowb * (uint32_t)(y1 - y0));
+            p[0] = me->id; p[1] = (uint32_t)u[0]; p[2] = (uint32_t)y0; p[3] = (uint32_t)(u[2] - u[0]); p[4] = (uint32_t)(y1 - y0); p[5] = rowb;
+            uint8_t *dst = (uint8_t *)(p + 6);
+            for (int32_t y = y0; y < y1; y++, dst += rowb) memcpy(dst, G_MEM + me->mem + (uint32_t)y * (uint32_t)me->pitch + (uint32_t)u[0] * bpp, rowb);
+            cmd_end();
+        }
     }
     RET(DD_OK, 2);
 END
@@ -681,6 +722,7 @@ static uint32_t vb_create(uint32_t desc)
 {
     DVB *v = calloc(1, sizeof *v); memcpy(v->desc, GP(desc), 16); v->desc[0] = 16; v->ref = 1;
     v->stride = fvf_stride(v->desc[2]);
+    if (v->desc[3] > 0x100000) v->desc[3] = 0x100000;             /* D3D allows 65535 vertices; no size wrap */
     uint32_t bytes = v->desc[3] * v->stride + 64;
     v->mem = bytes >= 0x10000 ? vm_alloc(0, bytes, 0x3000, 4) : heap_alloc(w32_process_heap, 8, bytes);
     dsr_log("vertex buffer: fvf %08x stride %u verts %u caps %08x", v->desc[2], v->stride, v->desc[3], v->desc[1]);
@@ -695,7 +737,7 @@ M(vb_AddRef, 1) ME(DVB, O_VB) RET((uint32_t)++me->ref, 1); END
 M(vb_Release, 1) ME(DVB, O_VB)
     uint32_t r = (uint32_t)--me->ref;
     if (!r) { uint32_t bytes = me->desc[3] * me->stride + 64; if (bytes >= 0x10000) vm_free(me->mem, 0, 0x8000); else heap_free(w32_process_heap, me->mem);
-              objs[rt_r32(G_MEM, me->g + 4)].type = 0; free(me); }
+              obj_drop(me->g); free(me); }
     RET(r, 1);
 END
 M(vb_Lock, 4) ME(DVB, O_VB)
@@ -751,7 +793,8 @@ M(dev_GetDirect3D, 2) ME(DDevice, O_DEV) rt_w32(G_MEM, ARG(1), me->dd->g_d3d); m
 M(dev_SetRenderTarget, 3) ME(DDevice, O_DEV) DSurface *s = obj(ARG(1), O_SURF); if (s) { me->rt = s; emit_rt(me); } RET(DD_OK, 3); END
 M(dev_GetRenderTarget, 2) ME(DDevice, O_DEV) rt_w32(G_MEM, ARG(1), me->rt->g_surf); surf_addref(me->rt); RET(DD_OK, 2); END
 M(dev_Clear, 7)
-    uint32_t n = ARG(1), rects = ARG(2), *p = cmd_begin(DSR_CLEAR, 20 + 16 * n);
+    uint32_t n = ARG(1), rects = ARG(2); if (!rects || n > 4096) n = 0;          /* D3D: no list = the whole viewport */
+    uint32_t *p = cmd_begin(DSR_CLEAR, 20 + 16 * n);
     p[0] = ARG(3); p[1] = ARG(4); p[2] = ARG(5); p[3] = ARG(6); p[4] = n; if (n) memcpy(p + 5, GP(rects), 16 * n);
     cmd_end(); RET(DD_OK, 7);
 END
@@ -790,7 +833,9 @@ END
 M(dev_GetRenderState, 3) ME(DDevice, O_DEV) rt_w32(G_MEM, ARG(2), ARG(1) < 256 ? me->rs[ARG(1)] : 0); RET(DD_OK, 3); END
 static void emit_draw(uint32_t prim, uint32_t fvf, const uint8_t *v, uint32_t nv, const uint8_t *idx, uint32_t ni)
 {
-    uint32_t st = fvf_stride(fvf), vb = st * nv, ib = (ni * 2 + 3) & ~3u, *p = cmd_begin(DSR_DRAW, 16 + vb + ib);
+    uint32_t st = fvf_stride(fvf);
+    if ((uint64_t)st * nv + (uint64_t)ni * 2 > DSR_RING_SIZE / 2) { static int w; if (!w++) fprintf(stderr, "dsr: a draw of %u vertices / %u indices dropped (too large)\n", nv, ni); return; }
+    uint32_t vb = st * nv, ib = (ni * 2 + 3) & ~3u, *p = cmd_begin(DSR_DRAW, 16 + vb + ib);
     p[0] = prim; p[1] = fvf; p[2] = nv; p[3] = ni;
     memcpy(p + 4, v, vb); if (ni) memcpy((uint8_t *)(p + 4) + vb, idx, ni * 2);
     cmd_end();
