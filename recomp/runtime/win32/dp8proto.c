@@ -81,6 +81,7 @@ struct dp8_conn {
     Rx rx[256]; uint8_t *part; size_t partlen, partcap; uint8_t partuser; int inpart;   /* receiver */
     uint32_t ack_due; int ack_poll, last_retry_seen;                       /* delayed acknowledgement */
     uint32_t last_recv, last_send, rtt;
+    uint32_t st_tx, st_rx, st_retx, st_rtt_max, st_t0;                    /* DP8_STATS */
     int end_sent, end_recv, end_seq_acked; uint8_t end_seq; int hard_left; uint32_t hard_next;
     int closed_reason; int reported; uint32_t closed_at;
     struct dp8_conn *next;
@@ -136,7 +137,7 @@ static void transmit(dp8_conn *c, uint8_t seq, int retry)
     /* refresh the acknowledgement fields: bNRcv and the SACK mask are current, not what they were at first send */
     size_t h = dp8_enc_dframe(b, cmd, ctl, seq, c->next_recv, rx_sack_mask(c));
     memcpy(b + h, f->buf + 4, f->len - 4);
-    raw_send(c->ep, &c->addr, b, h + f->len - 4);
+    raw_send(c->ep, &c->addr, b, h + f->len - 4); c->st_tx++; if (retry) c->st_retx++;
     f->sent = dp8_tick(); c->last_send = f->sent; c->ack_due = 0; c->ack_poll = 0;   /* the frame carries our ACK */
 }
 /* move queued messages into the window as space allows; messages larger than a frame are split */
@@ -189,7 +190,7 @@ static void handle_acks(dp8_conn *c, uint8_t nrcv, uint64_t sack)
         uint8_t seq = (uint8_t)i, d = (uint8_t)(c->next_send - seq);                   /* how far behind next_send */
         if (d == 0 || d > WINDOW) continue;                                             /* not in flight */
         if ((uint8_t)(nrcv - seq) >= 1 && (uint8_t)(nrcv - seq) <= WINDOW && (uint8_t)(c->next_send - nrcv) < WINDOW + 1) {   /* seq < nrcv */
-            if (!f->retries) { uint32_t s = dp8_tick() - f->sent; c->rtt = (c->rtt * 7 + s) / 8; }
+            if (!f->retries) { uint32_t s = dp8_tick() - f->sent; c->rtt = (c->rtt * 7 + s) / 8; if (s > c->st_rtt_max) c->st_rtt_max = s; }
             if (c->end_sent && seq == c->end_seq) c->end_seq_acked = 1;
             free(f->buf); f->buf = 0;
         } else {
@@ -251,7 +252,7 @@ static void handle_dframe(dp8_conn *c, const uint8_t *p, size_t len)
             if ((uint8_t)(s - c->next_recv) < 64 && !c->rx[s].have) { c->rx[s].have = 2; c->rx[s].len = 0; }   /* placeholder: dropped */
         }
     }
-    uint8_t d = (uint8_t)(f.seq - c->next_recv);
+    uint8_t d = (uint8_t)(f.seq - c->next_recv); c->st_rx++;
     c->last_retry_seen = f.ctl & CTL_RETRY;
     if (d >= 64) {                                                                       /* duplicate or out of window */
         if (f.cmd & CMD_POLL) send_sack(c); else if (!c->ack_due) c->ack_due = dp8_tick() + 20;
@@ -388,6 +389,14 @@ static void tick(dp8_ep *ep)
                 }
             }
             if (c->state == ST_CLOSED) goto closed;
+            {   static int on = -1; if (on < 0) on = getenv("DP8_STATS") != 0;      /* every 5 s: the link's figures */
+                if (on && now - c->st_t0 >= 5000) {
+                    char ip[32]; inet_ntop(AF_INET, &c->addr.sin_addr, ip, sizeof ip);
+                    if (c->st_t0) fprintf(stderr, "dp8 link %s: rtt %u ms (max %u), sent %u (resent %u), received %u, in flight %d, queued %s\n",
+                                          ip, c->rtt, c->st_rtt_max, c->st_tx, c->st_retx, c->st_rx, in_flight(c), c->q ? "yes" : "no");
+                    c->st_t0 = now; c->st_tx = c->st_rx = c->st_retx = c->st_rtt_max = 0;
+                }
+            }
             pump(c);
             if (c->ack_due && (int32_t)(now - c->ack_due) >= 0) send_sack(c);
             if (now - c->last_send > 25000 && now - c->last_recv > 25000 && !c->q) send_keepalive(c, 0);
