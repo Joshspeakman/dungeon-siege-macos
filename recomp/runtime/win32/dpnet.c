@@ -277,19 +277,34 @@ static void wide_blob(Blob *b, uint32_t p)                             /* guest 
 typedef struct Ev {
     struct Ev *next; Sess *s; uint32_t msg; uint32_t a[12]; Blob d1, d2; struct sockaddr_in addr; dp8_conn *conn;
     int (*post)(Ctx *, struct Ev *, uint32_t pmsg, uint32_t hr);      /* after the handler (read results, reply on the wire) */
-    uint32_t pmsg_size;
+    uint32_t pmsg_size; uint64_t queued_us;
 } Ev;
 static Ev *evq, *evq_tail; static pthread_mutex_t evm = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t evcv = PTHREAD_COND_INITIALIZER;
 static int dispatcher_started;
 static void dispatch_loop(Ctx *c, void *arg);
+static uint64_t now_us(void);
 static void post_event(Ev *e)
 {
     pthread_mutex_lock(&evm);
     if (!dispatcher_started) { dispatcher_started = 1; w32_spawn_service(dispatch_loop, 0); }
+    e->queued_us = now_us();
     if (evq_tail) evq_tail->next = e; else evq = e; evq_tail = e;
     pthread_cond_signal(&evcv); pthread_mutex_unlock(&evm);
 }
 static Ev *new_event(Sess *s, uint32_t msg) { Ev *e = calloc(1, sizeof *e); e->s = s; e->msg = msg; return e; }
+/* DP8_STATS=1: every 5 s, how long received messages wait in the queue before the game's handler runs, and how long
+ * the handler takes (the game's own processing) */
+static uint64_t now_us(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000; }
+static int stats_on(void) { static int on = -1; if (on < 0) on = getenv("DP8_STATS") != 0; return on; }
+static struct { uint64_t t0, n, wait, wait_max, handler, handler_max; } st;
+static void stats_report(void)
+{
+    uint64_t now = now_us(); if (!st.t0) st.t0 = now;
+    if (now - st.t0 < 5000000 || !st.n) return;
+    fprintf(stderr, "dp8 stats: %llu received; queue wait avg %.2f ms, max %.2f ms; handler avg %.2f ms, max %.2f ms\n",
+            (unsigned long long)st.n, st.wait / 1000.0 / st.n, st.wait_max / 1000.0, st.handler / 1000.0 / st.n, st.handler_max / 1000.0);
+    memset(&st, 0, sizeof st); st.t0 = now;
+}
 static uint32_t call_handler(Ctx *c, Sess *s, uint32_t msg, uint32_t pmsg)
 {
     if (!s->o->handler) return 0;
@@ -305,6 +320,8 @@ static void dispatch_loop(Ctx *c, void *arg)
         Ev *e = evq; evq = e->next; if (!evq) evq_tail = 0;
         pthread_mutex_unlock(&evm);
         uint32_t pm = 0, hr = 0;
+        uint64_t got_us = 0;
+        if (e->msg == M_RECEIVE && stats_on()) { got_us = now_us(); st.n++; uint64_t w = got_us - e->queued_us; st.wait += w; if (w > st.wait_max) st.wait_max = w; }
         if (e->msg == M_CONNECT_COMPLETE) {   /* never before the game's Connect call has returned (a fast loopback can) */
             pthread_mutex_lock(&e->s->m); while (e->s->in_connect_call) pthread_cond_wait(&e->s->conn_cv, &e->s->m); pthread_mutex_unlock(&e->s->m);
         }
@@ -313,6 +330,7 @@ static void dispatch_loop(Ctx *c, void *arg)
             LOG("-> game: message %#x\n", e->msg);
             hr = call_handler(c, e->s, e->msg, pm);
         }
+        if (got_us) { uint64_t h = now_us() - got_us; st.handler += h; if (h > st.handler_max) st.handler_max = h; stats_report(); }
         int keep = e->post ? e->post(c, e, pm, hr) : 0;
         if (pm && !keep) gfree(pm);
         free(e->d1.p); free(e->d2.p); free(e);
