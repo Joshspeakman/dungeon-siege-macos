@@ -24,46 +24,57 @@ int tank_read(const char *archive, const char *path, uint8_t **out, size_t *outl
     if (d == MAP_FAILED) return -1;
     int rc = -1;
     uint32_t dirset = u32(d, 12), fileset = u32(d, 16), dataoff = u32(d, 24);
-    if (dirset >= n || fileset >= n) goto done;
+    #define IN(o, len) ((uint64_t)(o) + (uint64_t)(len) <= n)          /* every offset checked: a damaged archive is refused */
+    if (!IN(dirset, 4) || !IN(fileset, 4)) goto done;
     /* the directory names, for building each file's path */
-    uint32_t ndir = u32(d, dirset); if (ndir > 100000) goto done;
+    uint32_t ndir = u32(d, dirset); if (ndir > 100000 || !IN(dirset + 4, 4ull * ndir)) goto done;
     uint32_t *doff = calloc(ndir, 4), *dpar = calloc(ndir, 4); const char **dname = calloc(ndir, sizeof *dname); uint16_t *dlen = calloc(ndir, 2);
     for (uint32_t k = 0; k < ndir; k++) {
-        uint32_t off = u32(d, dirset + 4 + 4 * k), o = dirset + off; doff[k] = off;
+        uint32_t off = u32(d, dirset + 4 + 4 * k); uint64_t o = (uint64_t)dirset + off; doff[k] = off;
+        if (!IN(o, 18) || !IN(o + 18, u16(d, o + 16))) { dlen[k] = 0; dname[k] = ""; continue; }
         dpar[k] = u32(d, o); dlen[k] = u16(d, o + 16); dname[k] = (const char *)d + o + 18;
     }
-    uint32_t nf = u32(d, fileset);
+    uint32_t nf = u32(d, fileset); if (!IN(fileset + 4, 4ull * nf)) nf = 0;
     for (uint32_t k = 0; k < nf && rc; k++) {
-        uint32_t o = fileset + u32(d, fileset + 4 + 4 * k);
+        uint64_t o64 = (uint64_t)fileset + u32(d, fileset + 4 + 4 * k);
+        if (!IN(o64, 30) || !IN(o64 + 30, u16(d, o64 + 28))) continue;
+        uint32_t o = (uint32_t)o64;
         uint32_t parent = u32(d, o), size = u32(d, o + 4), foff = u32(d, o + 8); uint16_t fmt = u16(d, o + 24), nlen = u16(d, o + 28);
         /* full path: walk the parents */
         char full[1024]; size_t len = 0; char parts[32][256]; int np = 0;
         snprintf(parts[np++], 256, "%.*s", nlen, (const char *)d + o + 30);
-        for (uint32_t p = parent, guard = 0; guard < 32; guard++) {
+        for (uint32_t p = parent, guard = 0; guard < 31; guard++) {
             uint32_t j = 0; while (j < ndir && doff[j] != p) j++;
             if (j == ndir || !dlen[j]) break;
             snprintf(parts[np++], 256, "%.*s", dlen[j], dname[j]);
             if (dpar[j] == p) break;
             p = dpar[j];
         }
-        for (int i = np - 1; i >= 0; i--) len += (size_t)snprintf(full + len, sizeof full - len, "%s%s", parts[i], i ? "/" : "");
-        if (strcasecmp(full, path)) continue;
-        uint8_t *buf = malloc(size ? size : 1);
-        if (fmt == 0) { if (dataoff + foff + size <= n) memcpy(buf, d + dataoff + foff, size); }
+        full[0] = 0;
+        for (int i = np - 1; i >= 0 && len < sizeof full; i--) len += (size_t)snprintf(full + len, sizeof full - len, "%s%s", parts[i], i ? "/" : "");
+        if (len >= sizeof full || strcasecmp(full, path)) continue;
+        if (size > (256u << 20)) continue;
+        uint8_t *buf = calloc(1, size ? size : 1); if (!buf) continue;
+        if (fmt == 0) { if (IN((uint64_t)dataoff + foff, size)) memcpy(buf, d + dataoff + foff, size); }
         else {
-            uint32_t o2 = (o + 30 + nlen + 1 + 3) & ~3u, chunk = u32(d, o2 + 4), nch = chunk ? (size + chunk - 1) / chunk : 0, w = 0;
+            uint32_t o2 = (o + 30 + nlen + 1 + 3) & ~3u; if (!IN(o2, 8)) { free(buf); continue; }
+            uint32_t chunk = u32(d, o2 + 4), nch = chunk ? (size + chunk - 1) / chunk : 0, w = 0;
             o2 += 8;
-            for (uint32_t ch = 0; ch < nch; ch++) {
+            if (!IN(o2, 16ull * nch)) nch = 0;
+            for (uint32_t ch = 0; ch < nch && w <= size; ch++) {
                 uint32_t usz = u32(d, o2 + 16 * ch), csz = u32(d, o2 + 16 * ch + 4), extra = u32(d, o2 + 16 * ch + 8), coff = u32(d, o2 + 16 * ch + 12);
-                const uint8_t *raw = d + dataoff + foff + coff;
+                uint64_t at = (uint64_t)dataoff + foff + coff;
+                if (!IN(at, (uint64_t)csz + extra)) break;
+                const uint8_t *raw = d + at;
                 if (csz < usz) { uLongf dl = size - w; uncompress(buf + w, &dl, raw, csz); w += (uint32_t)dl; }
                 else { uint32_t c = usz < size - w ? usz : size - w; memcpy(buf + w, raw, c); w += c; }
-                if (extra && w + extra <= size) { memcpy(buf + w, raw + csz, extra); w += extra; }
+                if (extra && (uint64_t)w + extra <= size) { memcpy(buf + w, raw + csz, extra); w += extra; }
             }
         }
         *out = buf; *outlen = size; rc = 0;
     }
     free(doff); free(dpar); free(dname); free(dlen);
+    #undef IN
 done:
     munmap((void *)d, n);
     return rc;

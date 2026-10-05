@@ -168,10 +168,10 @@ static void surface_upload(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     Surf *s = surf(r, p[0]); if (!s || s->fmt == 3) return;
     uint32_t x = p[1], y = p[2], w = p[3], h = p[4], pitch = p[5], off;
-    if (!w || !h || 24 + pitch * h > size) return;
+    if (!w || !h || 24 + (uint64_t)pitch * h > size) return;                     /* 64-bit: no wrap */
+    if (s->level >= s->tex.mipmapLevelCount || (uint64_t)x + w > (s->tex.width >> s->level ?: 1) || (uint64_t)y + h > (s->tex.height >> s->level ?: 1)) return;
     if (!r->enc) maybe_commit(r);
     void *dst = ring_alloc(r, pitch * h, &off); memcpy(dst, p + 6, pitch * h);
-    if (s->level >= s->tex.mipmapLevelCount || x + w > (s->tex.width >> s->level ?: 1) || y + h > (s->tex.height >> s->level ?: 1)) return;
     [blit_enc(r) copyFromBuffer:r->ring sourceOffset:off sourceBytesPerRow:pitch sourceBytesPerImage:pitch * h sourceSize:MTLSizeMake(w, h, 1)
             toTexture:s->tex destinationSlice:0 destinationLevel:s->level destinationOrigin:MTLOriginMake(x, y, 0)];
 }
@@ -182,8 +182,9 @@ static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t sr
 static void upload_over(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     Surf *s = surf(r, p[0]); uint32_t x = p[1], y = p[2], w = p[3], h = p[4], pitch = p[5], off;
-    if (!s || !w || !h || 24 + pitch * h > size) return;
+    if (!s || !w || !h || 24 + (uint64_t)pitch * h > size) return;
     if (w > 256 || h > 256) { surface_upload(r, p, size); return; }
+    if ((uint64_t)x + w > s->w || (uint64_t)y + h > s->h) return;
     if (!r->enc) maybe_commit(r);
     void *dst = ring_alloc(r, pitch * h, &off); memcpy(dst, p + 6, pitch * h);
     [blit_enc(r) copyFromBuffer:r->ring sourceOffset:off sourceBytesPerRow:pitch sourceBytesPerImage:pitch * h sourceSize:MTLSizeMake(w, h, 1)
@@ -284,7 +285,8 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
                     prim, fvf, nv, ni, r->rs[27], r->rs[19], r->rs[20], r->rs[15], r->rs[14], r->rs[23], r->tss[0][1], r->tss[0][4], r->tss[0][11], r->tss[0][24], r->tex[0],
                     r->tss[1][1], r->tss[1][4], r->tss[1][24], r->tex[1]); }
     }
-    if (!nv || 16 + nv * stride > size) { dsr_stat[1]++; return; }
+    if (!nv || 16 + (uint64_t)nv * stride + (uint64_t)ni * 2 > size) { dsr_stat[1]++; return; }   /* 64-bit: no wrap */
+    if (prim == 6 && (ni ? ni : nv) < 3) return;                                 /* a fan of fewer than 3: nothing (as D3D) */
     Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) { dsr_stat[2]++; return; }
     id<MTLRenderPipelineState> pso = pipeline_for(r, fvf, ds != NULL); if (!pso) { dsr_stat[3]++; return; }
     id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); if (!e) { dsr_stat[4]++; return; }
@@ -417,14 +419,14 @@ void dsr_renderer_set_readback(DSRRenderer *r, void *area, size_t size, volatile
 }
 static void readback(DSRRenderer *r, const uint32_t *p)
 {
-    Surf *s = surf(r, p[0]); uint32_t x = p[1], y = p[2], w = p[3], h = p[4];
-    if (s && r->rb_buf && s->fmt != 3 && x + w <= s->w && y + h <= s->h && w * h * 4 <= r->rb_buf.length) {
+    Surf *s = surf(r, p[0]); uint32_t x = p[1], y = p[2], w = p[3], h = p[4]; int ok = 0;
+    if (s && r->rb_buf && s->fmt != 3 && w && h && (uint64_t)x + w <= s->w && (uint64_t)y + h <= s->h && (uint64_t)w * h * 4 <= r->rb_buf.length) {
         if (r->enc) { [r->enc endEncoding]; r->enc = nil; }
         [blit_enc(r) copyFromTexture:s->tex sourceSlice:0 sourceLevel:s->level sourceOrigin:MTLOriginMake(x, y, 0) sourceSize:MTLSizeMake(w, h, 1)
                              toBuffer:r->rb_buf destinationOffset:0 destinationBytesPerRow:w * 4 destinationBytesPerImage:w * h * 4];
-        dsr_renderer_flush(r, 1);
+        dsr_renderer_flush(r, 1); ok = 1;
     }
-    if (r->rb_done) __atomic_store_n(r->rb_done, p[5], __ATOMIC_RELEASE);
+    if (r->rb_done) __atomic_store_n(r->rb_done, ok ? p[5] : p[5] | 0x80000000u, __ATOMIC_RELEASE);   /* high bit: not done */
 }
 double dsr_renderer_present_time(DSRRenderer *r) { return r->present_ts; }
 void dsr_renderer_set_graph(DSRRenderer *r, const float *a, int ha, const float *b, int hb) { r->g_a = a; r->g_ha = ha; r->g_b = b; r->g_hb = hb; r->g_on = 1; }

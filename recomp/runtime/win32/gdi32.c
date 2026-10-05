@@ -81,7 +81,8 @@ static CFStringRef mac_face(const char *face)
         {"fixedsys", "Courier New"}, {"terminal", "Courier New"}, {"small fonts", "Arial"}, {"ms shell dlg", "Arial"}, {0, 0}};
     for (int k = 0; map[k][0]; k++) if (!strcasecmp(face, map[k][0])) face = map[k][1];
     if (!*face) face = "Arial";
-    return CFStringCreateWithCString(0, face, kCFStringEncodingWindowsLatin1);
+    CFStringRef r = CFStringCreateWithCString(0, face, kCFStringEncodingWindowsLatin1);
+    return r ? r : CFStringCreateWithCString(0, "Arial", kCFStringEncodingASCII);   /* a name that doesn't convert */
 }
 static uint32_t make_font(int height, int weight, int italic, const char *face)
 {
