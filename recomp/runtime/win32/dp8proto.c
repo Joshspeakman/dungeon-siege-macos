@@ -25,7 +25,9 @@ enum {
     CTL_SEND1 = 0x40, CTL_SEND2 = 0x80,
     OP_CONNECT = 1, OP_CONNECTED = 2, OP_CONNECTED_SIGNED = 3, OP_HARD_DISCONNECT = 4, OP_SACK = 6,
     SACK_RESPONSE = 0x01, SACK_MASK1 = 0x02, SACK_MASK2 = 0x04, SACK_SEND1 = 0x08, SACK_SEND2 = 0x10,
-    VERSION = 0x00010005u, MAX_FRAME = 1400, WINDOW = 64,
+    /* MAX_FRAME: payload per frame; with the frame header (up to 16) and IP/UDP (28) a datagram stays under 1,210 bytes,
+     * within the 1,280 every internet path carries (VPN tunnels such as WireGuard's 1,380 dropped 1,432-byte ones) */
+    VERSION = 0x00010005u, MAX_FRAME = 1160, WINDOW = 64,
 };
 uint32_t dp8_tick(void) { return (uint32_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000000); }
 static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
