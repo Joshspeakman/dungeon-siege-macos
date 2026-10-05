@@ -34,6 +34,10 @@ JUNK = {'in', 'out', 'insb', 'insd', 'insw', 'outsb', 'outsd', 'outsw', 'iretd',
 # Functions a native implementation can take over (runtime/win32/hooks.c rt_override): at the function's first
 # instruction the runtime may perform the whole call (including the return) itself.
 OVERRIDES = {
+    0x005d2679: 'GoMind::RSDoJob (mpfeel: a joiner\'s orders)',
+    0x005fbb3c: 'GoFollower::Update (mpfeel: playback on joiners)',
+    0x005faf98: 'GoFollower: one plan update unpacked (mpfeel)',
+    0x00574789: 'WorldTime::RCSetServerTime (mpfeel: clock error on joiners)',
     0x0041aea9: 'crc32 (W32_CRCLOG: FuBi digest inputs)',
     0x004b7d69: 'default Shadows setting (All Complex on every Mac)',
     0x005cfa0d: 'ToString(eJobAbstractType)',

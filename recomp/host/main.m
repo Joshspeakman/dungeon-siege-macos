@@ -161,7 +161,7 @@ static void motion_tick(void)
 static void type_text(NSString *text);
 /* DS_CMDFILE=<path> (test mode): lines appended to the file while the game runs ("click:400,290", "type:Name",
  * "key:13", "shot:/tmp/a.png", ...) are carried out from the next frame on: for tests driven from outside.
- * "peek:7a05fc,a8,13" prints game memory: the dword at the first (hex) address, then each further offset added to the
+ * "lag:100,20" sets the DP8_LAG simulator; "peek:7a05fc,a8,13" prints game memory: the dword at the first (hex) address, then each further offset added to the
  * previous value and read again (a pointer chain) */
 static void cmdfile_poll(uint32_t fno)
 {
@@ -204,6 +204,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
+        else if (!strcmp(a->kind, "lag") && fno == a->frame) { void dp8_set_lag(int, int); dp8_set_lag(a->x, a->y); fprintf(stderr, "DungeonSiegeNative: lag %d ms, jitter %d ms\n", a->x, a->y); }
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
             for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }

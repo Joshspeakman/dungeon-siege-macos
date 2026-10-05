@@ -458,8 +458,10 @@ IMPL(kernel32, GetComputerNameA)
 IMPL(advapi32, GetUserNameA)
 {
     uint32_t buf = ARG(0), szp = ARG(1);
-    if (rt_r32(G_MEM, szp) < 7) { rt_w32(G_MEM, szp, 7); w32_set_last_error(c, 122); RET(0, 2); }
-    strcpy((char *)GP(buf), "player"); rt_w32(G_MEM, szp, 7); RET(1, 2);
+    const char *u = getenv("DS_USERNAME"); if (!u || !*u || strlen(u) > 63) u = "player";
+    uint32_t len = (uint32_t)strlen(u);
+    if (rt_r32(G_MEM, szp) < len + 1) { rt_w32(G_MEM, szp, len + 1); w32_set_last_error(c, 122); RET(0, 2); }
+    strcpy((char *)GP(buf), u); rt_w32(G_MEM, szp, len + 1); RET(1, 2);
 }
 IMPL(kernel32, SetPriorityClass) { RET(1, 2); }
 IMPL(kernel32, GetPriorityClass) { RET(0x20, 1); }
