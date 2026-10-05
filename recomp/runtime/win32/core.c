@@ -433,11 +433,27 @@ IMPL(kernel32, UnhandledExceptionFilter)
 IMPL(kernel32, IsDebuggerPresent) { RET(0, 0); }
 IMPL(kernel32, OutputDebugStringA) { if (getenv("W32_DEBUGSTRINGS")) fprintf(stderr, "[game] %s", GS(ARG(0))); RET(0, 1); }
 IMPL(kernel32, DebugBreak) { rt_unhandled(c, rt_r32(G_MEM, c->esp), "DebugBreak"); }
+/* this Mac's name as Windows gives one (a NetBIOS name: at most 15 characters, upper case): the game tells the machines
+ * in a multiplayer game apart by it, so it must differ between Macs. DS_COMPUTERNAME overrides it (two copies on one
+ * Mac, for tests). */
+void w32_computer_name(char *out, size_t cap)
+{
+    const char *e = getenv("DS_COMPUTERNAME"); char h[256] = "";
+    if (e && *e) snprintf(h, sizeof h, "%s", e); else gethostname(h, sizeof h);
+    char *dot = strchr(h, '.'); if (dot) *dot = 0;
+    size_t n = 0;
+    for (const char *p = h; *p && n < 15 && n + 1 < cap; p++) {
+        char ch = *p; if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') out[n++] = ch;
+    }
+    if (!n) n = (size_t)snprintf(out, cap, "MAC"); else out[n] = 0;
+}
 IMPL(kernel32, GetComputerNameA)
 {
-    uint32_t buf = ARG(0), szp = ARG(1);
-    if (rt_r32(G_MEM, szp) < 4) { rt_w32(G_MEM, szp, 4); w32_set_last_error(c, 111); RET(0, 2); }
-    strcpy((char *)GP(buf), "MAC"); rt_w32(G_MEM, szp, 3); RET(1, 2);
+    uint32_t buf = ARG(0), szp = ARG(1); char name[32]; w32_computer_name(name, sizeof name);
+    uint32_t len = (uint32_t)strlen(name);
+    if (rt_r32(G_MEM, szp) < len + 1) { rt_w32(G_MEM, szp, len + 1); w32_set_last_error(c, 111); RET(0, 2); }
+    strcpy((char *)GP(buf), name); rt_w32(G_MEM, szp, len); RET(1, 2);
 }
 IMPL(advapi32, GetUserNameA)
 {
