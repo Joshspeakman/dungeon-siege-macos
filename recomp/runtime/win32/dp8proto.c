@@ -180,7 +180,7 @@ static void conn_free_buffers(dp8_conn *c)
 {
     for (int i = 0; i < 256; i++) { free(c->win[i].buf); c->win[i].buf = 0; free(c->rx[i].data); c->rx[i].data = 0; c->rx[i].have = 0; }
     while (c->q) { Msg *m = c->q; c->q = m->next; free(m->data); free(m); } c->qtail = 0;
-    free(c->part); c->part = 0;
+    free(c->part); c->part = 0; c->partcap = c->partlen = 0; c->inpart = 0;
 }
 static void conn_close(dp8_conn *c, int reason)
 {
