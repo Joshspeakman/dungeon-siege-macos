@@ -109,7 +109,9 @@ uint32_t w32_callback(Ctx *c, uint32_t fn, int nargs, const uint32_t *args)
     uint32_t esp0 = c->esp, saved[4] = {c->ebx, c->esi, c->edi, c->ebp};
     for (int k = nargs - 1; k >= 0; k--) { c->esp -= 4; rt_w32(G_MEM, c->esp, args[k]); }
     c->esp -= 4; rt_w32(G_MEM, c->esp, CALLBACK_RET);
+    rt_fpcr_sync(c->fcw);                                     /* this thread's rounding mode follows the game's */
     if (w32_callback_hook) w32_callback_hook(c, fn); else rt_call(c, fn);
+    rt_fpcr_sync(c->fcw);
     uint32_t r = c->eax;
     c->esp = esp0; c->ebx = saved[0]; c->esi = saved[1]; c->edi = saved[2]; c->ebp = saved[3];
     return r;

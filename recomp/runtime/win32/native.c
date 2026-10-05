@@ -1,26 +1,19 @@
 /* Native versions of the game's hottest small maths routines (docs/PERFORMANCE-PLAN.md, step 6). Each one gives the
  * same bits as the recompiled original: the game runs the x87 in single precision (Direct3D's FPU setup), so every
- * x87 result is a float rounded with the current rounding mode, which is what float arithmetic here gives with the
- * host's rounding mode set to match and no fused multiply-add. When the precision isn't single the original runs.
+ * x87 result is a float rounded with the current rounding mode, which is what float arithmetic here gives (the host's
+ * rounding mode follows the game's: rt_fpcr_sync) without fused multiply-add. When the precision isn't single the original runs.
  *
  * DS_NATIVE_CHECK=1 runs the original as well on every call and reports any difference (differential test);
  * DS_NO_NATIVE=1 turns these off. */
 #include "w32.h"
 #include "ext.h"
-#include <fenv.h>
 
 #pragma clang fp contract(off)
-#pragma STDC FENV_ACCESS ON
 
 static int native_on(void) { static int on = -1; if (on < 0) on = !getenv("DS_NO_NATIVE"); return on; }
 static int check_on(void) { static int on = -1; if (on < 0) on = getenv("DS_NATIVE_CHECK") != 0; return on; }
 static float rf(uint32_t a) { uint32_t b = rt_r32(G_MEM, a); float f; memcpy(&f, &b, 4); return f; }
 static uint32_t fb(float f) { uint32_t b; memcpy(&b, &f, 4); return b; }
-static int host_round(uint32_t fcw)                      /* x87 rounding control -> <fenv.h> mode */
-{
-    switch ((fcw >> 10) & 3) { case 1: return FE_DOWNWARD; case 2: return FE_UPWARD; case 3: return FE_TOWARDZERO; default: return FE_TONEAREST; }
-}
-
 /* 0x5338e9: Quat::RotateVector(vector_3 &out, const vector_3 &in) const (ecx: x, y, z, w), the inner loop of
  * character animation. The original's operation order, and its memory order too: each component is stored before the
  * next one's inputs are read (out may be in). */
@@ -41,10 +34,7 @@ int native_override(Ctx *c, uint32_t addr)
         uint32_t q = c->ecx, o = ARG(0), v = ARG(1), before[3], mine[3];
         int chk = check_on(); static int inside; if (inside) return 0;
         if (chk) for (int k = 0; k < 3; k++) before[k] = rt_r32(G_MEM, o + 4u * (uint32_t)k);
-        int mode = host_round(c->fcw), old = mode != FE_TONEAREST ? fegetround() : 0;
-        if (mode != FE_TONEAREST) fesetround(mode);
-        quat_rotate(q, o, v);
-        if (mode != FE_TONEAREST) fesetround(old);
+        quat_rotate(q, o, v);                              /* the host's rounding mode already follows the game's */
         if (chk) {                                         /* the original too, from the same memory, and compare */
             static unsigned long calls, diffs;
             for (int k = 0; k < 3; k++) { mine[k] = rt_r32(G_MEM, o + 4u * (uint32_t)k); rt_w32(G_MEM, o + 4u * (uint32_t)k, before[k]); }

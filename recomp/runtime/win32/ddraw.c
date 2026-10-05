@@ -653,7 +653,7 @@ M(d3d_CreateDevice, 4) ME(DDraw, O_D3D)
     DSurface *rt = obj(ARG(2), O_SURF); uint32_t g = device_create(me, rt);
     /* as Direct3D: unless the application asked to keep its FPU state (DDSCL_FPUPRESERVE), the calling thread's x87 is
      * left in single precision with exceptions masked (this game asks for that outright with DDSCL_FPUSETUP) */
-    if (!(me->coop & 0x1000u) && !getenv("W32_NO_FPUSETUP")) c->fcw = (c->fcw & ~0xf3fu) | 0x3fu;   /* W32_NO_FPUSETUP: test switch */
+    if (!(me->coop & 0x1000u) && !getenv("W32_NO_FPUSETUP")) rt_fcw_set(c, (c->fcw & ~0xf3fu) | 0x3fu);   /* W32_NO_FPUSETUP: test switch */
     dsr_log("device created (%08x) on surface %u", rt_r32(G_MEM, ARG(1)), rt ? rt->id : 0);
     rt_w32(G_MEM, ARG(3), g); RET(DD_OK, 4);
 END

@@ -187,49 +187,30 @@ static inline double rt_pc(uint32_t fcw, double x)
     return (a >= 1.1754943508222875e-38 && a <= 3.4028234663852886e+38) ? (double)rt_f32(fcw, x) : x;
 }
 #define PC(x)     rt_pc(c->fcw, (x))
-/* The x87 rounds the exact result once; here a double operation rounds to nearest first and PC then rounds that to
- * float, which in the directed modes (down, up, toward zero) is wrong when the double lands exactly on a float but the
- * exact result lies just to one side (e.g. -1 + 1e-30 toward zero is -0.99999994 on the x87, not -1). These take the
- * exact error of the double operation (TwoSum, or a fused multiply-add residual) and step one float in the rounding
- * direction in that case; round-to-nearest takes the usual path. */
-static inline double rt_pc_err(uint32_t fcw, double s, double err)
+/* The host's rounding mode follows the game's x87 rounding control on every thread that runs game code (rt_fcw_set at
+ * each control-word change, rt_fpcr_sync where a thread starts running game code). The game spends much of its time
+ * rounding toward zero, and in the directed modes (down, up, toward zero) rounding to double and then to float gives
+ * exactly the x87's single rounding, so PC() and the float stores are exact; to nearest the hardware's default is
+ * kept. Library maths that assumes round-to-nearest (the x87 transcendentals) goes through rt_x87_* below. */
+extern __thread uint32_t rt_host_rc;
+static inline void rt_fpcr_sync(uint32_t fcw)
 {
-    double r = rt_pc(fcw, s), a = fabs(s);
-    if (err == 0 || r != s || !(a >= 1.1754943508222875e-38 && a <= 3.4028234663852886e+38)) return r;
-    float f = (float)s; uint32_t b; memcpy(&b, &f, 4);
-    switch ((fcw >> 10) & 3) {
-    case 1: if (err < 0) b = (b >> 31) ? b + 1 : b - 1; break;        /* down */
-    case 2: if (err > 0) b = (b >> 31) ? b - 1 : b + 1; break;        /* up */
-    case 3: if ((err < 0) != (s < 0)) b -= 1; break;                  /* toward zero */
-    default: break;
+#if defined(__aarch64__)
+    uint32_t rc = (fcw >> 10) & 3;
+    if (__builtin_expect(rc != rt_host_rc, 0)) {
+        static const uint64_t arm[4] = {0, 2ull << 22, 1ull << 22, 3ull << 22};   /* x87 nearest/down/up/zero -> ARM RMode */
+        __asm__ volatile("" ::: "memory");
+        __builtin_arm_wsr64("fpcr", (__builtin_arm_rsr64("fpcr") & ~(3ull << 22)) | arm[rc]);
+        __asm__ volatile("" ::: "memory");
+        rt_host_rc = rc;
     }
-    memcpy(&f, &b, 4); return f;
+#else
+    (void)fcw;
+#endif
 }
-#define RT_DIRECTED(fcw) __builtin_expect(((fcw) & 0xf00u) != 0 && ((fcw) & 0x300u) == 0, 0)   /* single, not nearest */
-static inline double rt_pc_add(uint32_t fcw, double x, double y)
-{
-    double s = x + y; if (!RT_DIRECTED(fcw)) return rt_pc(fcw, s);
-    double bb = s - x, e = (x - (s - bb)) + (y - bb); return rt_pc_err(fcw, s, e);
-}
-static inline double rt_pc_mul(uint32_t fcw, double x, double y)
-{
-    double p = x * y; if (!RT_DIRECTED(fcw)) return rt_pc(fcw, p);
-    return rt_pc_err(fcw, p, fma(x, y, -p));
-}
-static inline double rt_pc_div(uint32_t fcw, double x, double y)
-{
-    double q = x / y; if (!RT_DIRECTED(fcw) || !(q == q) || y == 0) return rt_pc(fcw, q);
-    double r = fma(-q, y, x); return rt_pc_err(fcw, q, r == 0 ? 0 : (r < 0) == (y < 0) ? 1 : -1);   /* sign of (exact - q) */
-}
-static inline double rt_pc_sqrt(uint32_t fcw, double x)
-{
-    double q = sqrt(x); if (!RT_DIRECTED(fcw) || !(q > 0)) return rt_pc(fcw, q);
-    return rt_pc_err(fcw, q, fma(-q, q, x));
-}
-#define PCADD(x, y) rt_pc_add(c->fcw, (x), (y))
-#define PCSUB(x, y) rt_pc_add(c->fcw, (x), -(y))
-#define PCMUL(x, y) rt_pc_mul(c->fcw, (x), (y))
-#define PCDIV(x, y) rt_pc_div(c->fcw, (x), (y))
+static inline void rt_fcw_set(Ctx *c, uint32_t v) { c->fcw = v; rt_fpcr_sync(v); }
+double rt_x87_1(int op, double x);                 /* 0 f2xm1, 1 fptan, 2 fsin, 3 fcos */
+double rt_x87_2(int op, double y, double x);       /* 0 fyl2x, 1 fpatan, 2 fyl2xp1 */
 enum { FSW_C0 = 0x100, FSW_C1 = 0x200, FSW_C2 = 0x400, FSW_C3 = 0x4000 };
 static inline void rt_fcom(Ctx *c, double a, double b)
 {
