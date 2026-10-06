@@ -363,6 +363,28 @@ static NSArray<NSDictionary *> *notch_choices(void)
              @{@"value": @"around", @"label": @"Around the Notch", @"note": @"The picture on the whole display, the notch over its top"}];
 }
 static void apply_notch(NSString *v) { setenv("DS_NOTCH", v.UTF8String, 1); }
+/* Interface Size: the game runs at the chosen resolution divided by this, so its interface is laid out that much
+ * larger, and the renderer draws the screen at the chosen resolution itself (DSR_RENDER_SCALE), so the world stays sharp.
+ * Only sizes that leave the game at least 800x600 (what its interface is laid out for) are offered. */
+static NSArray<NSDictionary *> *ui_choices(NSString *res)
+{
+    int W = 0, H = 0; sscanf(res.UTF8String, "%dx%d", &W, &H);
+    NSMutableArray *a = [NSMutableArray array];
+    static const int sizes[] = {100, 125, 150, 175, 200, 250, 300};
+    for (size_t k = 0; k < sizeof sizes / sizeof *sizes; k++) { int pc = sizes[k];
+        if (pc > 100 && (W * 100 / pc < 800 || H * 100 / pc < 600)) continue;
+        [a addObject:@{@"value": [NSString stringWithFormat:@"%d", pc], @"label": [NSString stringWithFormat:@"%d%%", pc],
+                       @"note": pc == 100 ? @"As the game draws it" : [NSString stringWithFormat:@"The game at %d x %d, drawn at %d x %d", (int)lround(W * 100.0 / pc), (int)lround(H * 100.0 / pc), W, H]}];
+    }
+    return a;
+}
+static void apply_ui(NSString *res, NSString *size)
+{
+    int W = 0, H = 0, pc = size.intValue; sscanf(res.UTF8String, "%dx%d", &W, &H);
+    if (pc <= 100 || !W || !H) { unsetenv("DSR_RENDER_SCALE"); return; }
+    setenv("DS_RESOLUTION", [NSString stringWithFormat:@"%dx%d", (int)lround(W * 100.0 / pc), (int)lround(H * 100.0 / pc)].UTF8String, 1);
+    setenv("DSR_RENDER_SCALE", [NSString stringWithFormat:@"%g", pc / 100.0].UTF8String, 1);
+}
 static NSArray<NSDictionary *> *resolution_choices(BOOL below_notch)
 {
     NSScreen *s = NSScreen.mainScreen; int W = (int)s.frame.size.width, H = (int)s.frame.size.height; double sc = s.backingScaleFactor;
@@ -820,6 +842,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     DSRow *notch = [DSRow new]; notch.title = @"Notch"; notch.choices = notch_choices(); notch.index = index_of(notch.choices, saved[@"notch"], 0);
     BOOL (^below)(void) = ^BOOL { return ![notch.choices[notch.index][@"value"] isEqualToString:@"around"]; };
     res.title = @"Resolution"; res.choices = resolution_choices(below()); res.index = index_of(res.choices, saved[@"resolution"], 0);
+    DSRow *ui = [DSRow new]; ui.title = @"Interface Size"; ui.choices = ui_choices(res.choices[res.index][@"value"]); ui.index = index_of(ui.choices, saved[@"interfaceSize"], 0);
     dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], default_distance_index());
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
     shd.title = @"Shadow Detail"; shd.choices = shadow_detail_choices(); shd.index = index_of(shd.choices, saved[@"shadowDetail"], 2);
@@ -870,7 +893,8 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
         if (saved.count) { apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data, modFiles());
-                           apply_shadows(shd.choices[shd.index][@"value"], she.choices[she.index][@"value"]); apply_notch(notch.choices[notch.index][@"value"]); }
+                           apply_shadows(shd.choices[shd.index][@"value"], she.choices[she.index][@"value"]); apply_notch(notch.choices[notch.index][@"value"]);
+                           apply_ui(res.choices[res.index][@"value"], ui.choices[ui.index][@"value"]); }
         return 1;
     }
 
@@ -883,7 +907,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     BOOL shotMode = shot != NULL;
     shd.title = @"Shadow Detail"; she.title = @"Shadow Edges";
     DSSection *display = [DSSection new], *graphics = [DSSection new], *modsSec = [DSSection new], *updSec = [DSSection new];
-    display.title = @"Display"; display.rows = notch_height() > 0 ? @[res, notch, fps, dist, gam] : @[res, fps, dist, gam];
+    display.title = @"Display"; display.rows = notch_height() > 0 ? @[res, ui, notch, fps, dist, gam] : @[res, ui, fps, dist, gam];
     graphics.title = @"Graphics"; graphics.rows = @[flt, det, gsh, shd, she];
     modsSec.title = @"Mods"; modsSec.summary = ^NSString * { return mods.choices[mods.index][@"label"]; };
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
@@ -925,6 +949,11 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         if (below() != wasBelow) {                                  /* the Notch row: "This display" changes size */
             NSString *cur = res.choices[res.index][@"value"]; wasBelow = below();
             res.choices = resolution_choices(wasBelow); res.index = index_of(res.choices, cur, 0);
+        }
+        {   /* the Resolution row: which interface sizes fit (the largest that still does, if the chosen one no longer fits) */
+            NSString *cur = ui.choices[ui.index][@"value"]; ui.choices = ui_choices(res.choices[res.index][@"value"]);
+            NSInteger k = (NSInteger)ui.choices.count - 1; while (k > 0 && [ui.choices[k][@"value"] intValue] > cur.intValue) k--;
+            ui.index = k;
         }
         prefsKeep(prefsLoa);
         if (isLoa() != prefsLoa) { prefsLoa = isLoa(); prefsLoad(prefsLoa); }
@@ -976,10 +1005,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     for (NSDictionary *m in found) { if ([m[@"games"] intValue] & MOD_BASE) [seenBase addObject:m[@"id"]]; if ([m[@"games"] intValue] & MOD_LOA) [seenLoa addObject:m[@"id"]]; }
     NSString *sdv = shd.choices[shd.index][@"value"], *sev = she.choices[she.index][@"value"];
     prefsKeep(prefsLoa); prefsSave();
-    NSString *nv = notch.choices[notch.index][@"value"];
-    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev, @"notch": nv,
+    NSString *nv = notch.choices[notch.index][@"value"], *uv = ui.choices[ui.index][@"value"];
+    [@{@"interfaceSize": uv, @"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev, @"notch": nv,
        mods_key(NO): onBase.allObjects, mods_key(YES): onLoa.allObjects,
        [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev); apply_notch(nv);
+    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev); apply_notch(nv); apply_ui(rv, uv);
     return 1;
 }
