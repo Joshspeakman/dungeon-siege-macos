@@ -240,7 +240,10 @@ static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignm
     else { [[NSColor colorWithSRGBRed:0.36 green:0.22 blue:0.12 alpha:1] setFill]; [[NSBezierPath bezierPathWithRoundedRect:r xRadius:6 yRadius:6] fill]; }
     NSShadow *sh = [NSShadow new]; sh.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; sh.shadowOffset = NSMakeSize(0, -1.5); sh.shadowBlurRadius = 2;
     NSColor *c = self.hover == code ? [NSColor colorWithSRGBRed:1 green:0.93 blue:0.72 alpha:1] : primary ? gold() : parchment();
-    draw_text(title, cp(primary ? 24 : 20, YES), c, NSMakeRect(r.origin.x, NSMidY(r) - (primary ? 15 : 13), r.size.width, 32), NSTextAlignmentCenter, sh);
+    /* the capitals centred on the button (the line's own box sits them high: it leaves room below for descenders) */
+    NSFont *f = cp(primary ? 24 : 20, YES); NSDictionary *at = @{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSShadowAttributeName: sh};
+    NSSize sz = [title sizeWithAttributes:at];
+    [title drawAtPoint:NSMakePoint(NSMidX(r) - sz.width / 2, round(NSMidY(r) + f.capHeight / 2 - f.ascender)) withAttributes:at];
 }
 - (void)drawArrow:(NSRect)r right:(BOOL)right lit:(BOOL)lit
 {
@@ -298,14 +301,18 @@ static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignm
     if (self.banner) {
         /* the game's key art across the top (downloaded at install), fading into the wall */
         NSSize is = self.banner.size; CGFloat h = b.size.width * is.height / is.width;
-        NSRect br = NSMakeRect(0, 0, b.size.width, BANNER_H);
+        NSRect br = NSMakeRect(0, 0, b.size.width, BANNER_H), ir = NSMakeRect(0, (BANNER_H - h) / 2, b.size.width, h);
         [NSColor.blackColor setFill]; NSRectFill(br);
-        [self.banner drawInRect:NSMakeRect(0, (BANNER_H - h) / 2, b.size.width, h) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES
+        [self.banner drawInRect:ir fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES
                           hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
         NSGradient *fade = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithWhite:0 alpha:0] endingColor:[NSColor colorWithWhite:0 alpha:0.9]];
         [fade drawInRect:NSMakeRect(0, BANNER_H - 40, b.size.width, 40) angle:90];
         [[NSColor colorWithSRGBRed:0.55 green:0.38 blue:0.2 alpha:0.9] setFill]; NSRectFill(NSMakeRect(0, BANNER_H, b.size.width, 1.5));
-        draw_text(@"NATIVE EDITION FOR macOS", cp(13, NO), gold(), NSMakeRect(b.size.width * 0.1, BANNER_H - 34, b.size.width * 0.4, 18), NSTextAlignmentCenter, sh);
+        /* the subtitle beside the hook of the logo's S, under "SIEGE" (placed on the art, so it follows it) */
+        NSFont *sf = cp(14, NO); NSRect sr = NSMakeRect(ir.origin.x + 0.299 * ir.size.width, ir.origin.y + 0.675 * ir.size.height, 0.312 * ir.size.width, 0.15 * ir.size.height);
+        NSDictionary *sa = @{NSFontAttributeName: sf, NSForegroundColorAttributeName: gold(), NSShadowAttributeName: sh, NSKernAttributeName: @1};
+        NSString *st = @"NATIVE EDITION FOR macOS"; NSSize ss = [st sizeWithAttributes:sa];
+        [st drawAtPoint:NSMakePoint(NSMidX(sr) - ss.width / 2, round(NSMidY(sr) + sf.capHeight / 2 - sf.ascender)) withAttributes:sa];
     } else {
         /* without it: the main menu's title plaque */
         NSRect pr = NSMakeRect(NSMidX(b) - 290, 60, 580, 128);
