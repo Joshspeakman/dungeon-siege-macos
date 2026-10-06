@@ -354,10 +354,19 @@ static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignm
 @end
 
 // ---------------------------------------------------------------- choices, settings file, the window
-static NSArray<NSDictionary *> *resolution_choices(void)
+/* A display with a notch: the game in macOS full screen (with Game Mode either way) below it, with a black band beside
+ * the camera, or over the whole display around it, the notch covering a little of the picture's top centre (DS_NOTCH) */
+static int notch_height(void) { if (@available(macOS 12.0, *)) return (int)NSScreen.mainScreen.safeAreaInsets.top; return 0; }
+static NSArray<NSDictionary *> *notch_choices(void)
+{
+    return @[@{@"value": @"hide", @"label": @"Hide the Notch", @"note": @"The picture below the camera, a black band beside it"},
+             @{@"value": @"around", @"label": @"Around the Notch", @"note": @"The picture on the whole display, the notch over its top"}];
+}
+static void apply_notch(NSString *v) { setenv("DS_NOTCH", v.UTF8String, 1); }
+static NSArray<NSDictionary *> *resolution_choices(BOOL below_notch)
 {
     NSScreen *s = NSScreen.mainScreen; int W = (int)s.frame.size.width, H = (int)s.frame.size.height; double sc = s.backingScaleFactor;
-    if (@available(macOS 12.0, *)) H -= (int)s.safeAreaInsets.top;   /* full screen sits below a notch */
+    if (below_notch) H -= notch_height();
     NSMutableArray *a = [NSMutableArray array]; NSMutableSet *seen = [NSMutableSet set];
     void (^add)(int, int, NSString *) = ^(int w, int h, NSString *note) {
         NSString *v = [NSString stringWithFormat:@"%dx%d", w, h]; if ([seen containsObject:v]) return; [seen addObject:v];
@@ -808,7 +817,9 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"];
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
     DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new], *mode = [DSRow new], *shd = [DSRow new], *she = [DSRow new];
-    res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
+    DSRow *notch = [DSRow new]; notch.title = @"Notch"; notch.choices = notch_choices(); notch.index = index_of(notch.choices, saved[@"notch"], 0);
+    BOOL (^below)(void) = ^BOOL { return ![notch.choices[notch.index][@"value"] isEqualToString:@"around"]; };
+    res.title = @"Resolution"; res.choices = resolution_choices(below()); res.index = index_of(res.choices, saved[@"resolution"], 0);
     dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], default_distance_index());
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
     shd.title = @"Shadow Detail"; shd.choices = shadow_detail_choices(); shd.index = index_of(shd.choices, saved[@"shadowDetail"], 2);
@@ -859,7 +870,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
         if (saved.count) { apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data, modFiles());
-                           apply_shadows(shd.choices[shd.index][@"value"], she.choices[she.index][@"value"]); }
+                           apply_shadows(shd.choices[shd.index][@"value"], she.choices[she.index][@"value"]); apply_notch(notch.choices[notch.index][@"value"]); }
         return 1;
     }
 
@@ -872,7 +883,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     BOOL shotMode = shot != NULL;
     shd.title = @"Shadow Detail"; she.title = @"Shadow Edges";
     DSSection *display = [DSSection new], *graphics = [DSSection new], *modsSec = [DSSection new], *updSec = [DSSection new];
-    display.title = @"Display"; display.rows = @[res, fps, dist, gam];
+    display.title = @"Display"; display.rows = notch_height() > 0 ? @[res, notch, fps, dist, gam] : @[res, fps, dist, gam];
     graphics.title = @"Graphics"; graphics.rows = @[flt, det, gsh, shd, she];
     modsSec.title = @"Mods"; modsSec.summary = ^NSString * { return mods.choices[mods.index][@"label"]; };
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
@@ -908,8 +919,13 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         }
         check();
     };
+    __block BOOL wasBelow = below();
     v.onChange = ^{                                                 /* the Game row decides which mods and which prefs.gas */
         mods.choices = modsRow();
+        if (below() != wasBelow) {                                  /* the Notch row: "This display" changes size */
+            NSString *cur = res.choices[res.index][@"value"]; wasBelow = below();
+            res.choices = resolution_choices(wasBelow); res.index = index_of(res.choices, cur, 0);
+        }
         prefsKeep(prefsLoa);
         if (isLoa() != prefsLoa) { prefsLoa = isLoa(); prefsLoad(prefsLoa); }
     };
@@ -960,9 +976,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     for (NSDictionary *m in found) { if ([m[@"games"] intValue] & MOD_BASE) [seenBase addObject:m[@"id"]]; if ([m[@"games"] intValue] & MOD_LOA) [seenLoa addObject:m[@"id"]]; }
     NSString *sdv = shd.choices[shd.index][@"value"], *sev = she.choices[she.index][@"value"];
     prefsKeep(prefsLoa); prefsSave();
-    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev,
+    NSString *nv = notch.choices[notch.index][@"value"];
+    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev, @"notch": nv,
        mods_key(NO): onBase.allObjects, mods_key(YES): onLoa.allObjects,
        [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev);
+    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev); apply_notch(nv);
     return 1;
 }
