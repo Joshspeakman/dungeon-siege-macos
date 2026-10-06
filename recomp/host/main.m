@@ -350,6 +350,11 @@ static void capture(int on)
     if (on) { [NSCursor hide]; CGAssociateMouseAndMouseCursorPosition(false); }
     else { CGAssociateMouseAndMouseCursorPosition(true); [NSCursor unhide]; }
 }
+/* The game runs in macOS full screen (a Space of its own), which is what turns on Game Mode (the CPU and GPU kept for
+ * the game, Bluetooth latency halved) for an app that declares itself a game (install.sh: Info.plist). On a Mac with a
+ * notch a full-screen window sits below the camera housing, so the screen size given to the game leaves that band out. */
+static void enter_fullscreen(void) { if (win && !(win.styleMask & NSWindowStyleMaskFullScreen)) [win toggleFullScreen:nil]; }
+static void leave_fullscreen(void) { if (win && (win.styleMask & NSWindowStyleMaskFullScreen)) [win toggleFullScreen:nil]; }
 static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t style)
 {
     (void)x; (void)y; (void)w; (void)h; (void)style;
@@ -378,11 +383,12 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
         if (visible && !win.visible) {
             if (test_mode) [win orderBack:nil];
             else {
-                [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
                 [win makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; capture(1);
+                if (getenv("DS_BORDERLESS")) [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];   /* the old way: a screen-sized window */
+                else enter_fullscreen();
             }
         }
-        else if (!visible && win.visible) { [win orderOut:nil]; capture(0); }
+        else if (!visible && win.visible) { leave_fullscreen(); [win orderOut:nil]; capture(0); }
     });
 }
 
@@ -510,11 +516,11 @@ static void *game_thread(void *arg)
     dispatch_async(dispatch_get_main_queue(), ^{
         capture(0);
         if (path && !test_mode) {
-            [win orderOut:nil]; [NSApp setPresentationOptions:NSApplicationPresentationDefault];
+            leave_fullscreen(); [win orderOut:nil]; [NSApp setPresentationOptions:NSApplicationPresentationDefault];
             show_report_alert(@"Dungeon Siege stopped unexpectedly.", path);
         }
         if (bsum && !test_mode) {
-            [win orderOut:nil]; [NSApp setPresentationOptions:NSApplicationPresentationDefault];
+            leave_fullscreen(); [win orderOut:nil]; [NSApp setPresentationOptions:NSApplicationPresentationDefault];
             NSAlert *al = [NSAlert new]; al.messageText = bpath ? @"Benchmark finished" : @"Benchmark not completed"; al.informativeText = bsum;
             if (bpath) [al addButtonWithTitle:@"Show Results"];
             [al addButtonWithTitle:@"OK"]; [NSApp activateIgnoringOtherApps:YES];
@@ -559,6 +565,7 @@ int main(int argc, char **argv)
         snprintf(drive_c, sizeof drive_c, "%s/drive_c", data); snprintf(overlay, sizeof overlay, "%s/game", data);
         mkdir(data, 0755); mkdir(drive_c, 0755); mkdir(overlay, 0755);
         NSRect sf = NSScreen.mainScreen.frame; w32_screen_w = (int)sf.size.width; w32_screen_h = (int)sf.size.height;
+        if (@available(macOS 12.0, *)) if (!getenv("DS_BORDERLESS")) w32_screen_h -= (int)NSScreen.mainScreen.safeAreaInsets.top;   /* below the notch */
         w32_screen_scale = NSScreen.mainScreen.backingScaleFactor;
         init_keymap();
         {   /* the launch window (resolution, view distance, frame rate) unless in test mode */
