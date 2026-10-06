@@ -36,13 +36,15 @@ troubleshooting.
 - **GOG or Steam.** Either edition of 1.11.1 works. The Steam executable has no DRM, and a Steam copy plays with GOG
   players.
 - **A launch window** in the game's style: single player or multiplayer, Legends of Aranna, mods, resolution, view
-  distance and frame rate, all remembered. **Updates** come from it too: it tells you when a newer version is on
+  distance, shadows and frame rate, all remembered. **Updates** come from it too: it tells you when a newer version is on
   GitHub and installs it.
 - **Legends of Aranna**, the expansion, from your own copy's data (`./install.sh --expansion <folder>`).
 - **Mods** chosen per game in the launcher (Yesterhaven, ResolutionFix, UberUI and others; credits in
   [docs/MODS.md](docs/MODS.md)).
 - **Best graphics by default:** a new installation starts with all complex shadows and trilinear filtering. The 2002
   game picks lower settings for any video card newer than its hardware table. Choices in Options still apply.
+- **Sharper, softer character shadows:** Shadow Detail (up to 1024 pixels, 256 by default; the original is 64) and
+  Shadow Edges (Soft by default) in the launcher.
 - **The game's own sound and video** (Miles, Bink), recompiled as well and playing through Core Audio.
 - Mouse, trackpad and keyboard, saving and loading, and the full single-player campaign.
 - **Crash and freeze reports** in `~/Games/DungeonSiegeNative/CrashReports`, so problems can be diagnosed.
