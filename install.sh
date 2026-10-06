@@ -6,8 +6,11 @@
 #                                      Steam's download location is used. It is copied into the data folder. A build
 #                                      from it plays with GOG copies (it presents the GOG 1.11.1 identity in
 #                                      multiplayer; DS_STEAM_IDENTITY=steam keeps Steam's own).
-# install.sh --yesterhaven <folder>    adds Gas Powered Games' Yesterhaven multiplayer map (Yesterhaven.dsmap and
-#                                      Yesterhaven.dsres, found anywhere under <folder>); on its own or with the above
+# install.sh --yesterhaven <folder|DungeonSiegeYesterhaven.exe>  adds Gas Powered Games' free Yesterhaven multiplayer
+#                                      adventure (Yesterhaven.dsmap and Yesterhaven.dsres, found anywhere under <folder>,
+#                                      or taken out of its installer); on its own or with the above. Without it, an
+#                                      install downloads Yesterhaven's installer from the Internet Archive (hash-checked)
+#                                      when the Mods folder doesn't have it yet; --no-downloads skips that.
 # install.sh --expansion <folder>      adds Legends of Aranna from your own copy (Expansion.dsres, Expansion.dsmap and
 #                                      ExpVoices.dsres, plus XPRes.dsres/XPMap.dsmap if present, found anywhere under
 #                                      <folder>, e.g. the installed game's DSLOA folder or the disc); only the data is
@@ -36,7 +39,7 @@
 # installs capstone and unicorn with pip into recomp/.venv).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; BENCH=""; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; BENCH=""; NODL="${DS_NO_DOWNLOADS:-}"; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
 NIGHTLY=""; AS_NIGHTLY=""; STEAM=""; ARGS=()
 STEAM_SHA=c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab
 STEAM_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_39190/depot_39191"
@@ -46,7 +49,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = --steam ]; then if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then STEAM="$2"; shift 2; else STEAM="$STEAM_DEPOT"; shift; fi; continue; fi
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
-    --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;; --benchmark) BENCH="$2"; shift 2;;
+    --no-downloads) NODL=1; shift;; --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;; --benchmark) BENCH="$2"; shift 2;;
     --collection) COL="$2"; shift 2;; --save-collection) SAVECOL="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
   esac
@@ -80,6 +83,10 @@ fi
 # launcher links ticked mods into the data folder's view of the game folder, which the game sees as its own Maps and
 # Resources folders. The game folder itself is not touched.
 yesterhaven() {
+  if [ -f "$YH" ]; then        # its installer: the two archives taken out of it (recomp/tools/extract_installer.py checks it)
+    mkdir -p "$DATA/mods"; python3 "$HERE/recomp/tools/extract_installer.py" "$YH" "$DATA/mods" | sed 's/^/   /'
+    echo "== Yesterhaven added to the Mods list: host a multiplayer game and choose it under Map Settings"; return
+  fi
   local m r; m="$(find "$YH" -iname Yesterhaven.dsmap -print -quit 2>/dev/null)"; r="$(find "$YH" -iname Yesterhaven.dsres -print -quit 2>/dev/null)"
   [ -n "$m" ] && [ -n "$r" ] || { echo "Yesterhaven.dsmap and Yesterhaven.dsres not found under $YH"; exit 1; }
   for f in "$m" "$r"; do   # Dungeon Siege archives ("DSigTank") made for Yesterhaven
@@ -104,6 +111,22 @@ mods() {
   done < <(find "$src" \( -iname '*.dsres' -o -iname '*.dsmap' \) -type f -print0 2>/dev/null)
   echo "== $count mod archive(s) from $src added to the Mods list (tick them in the launcher)"
 }
+# Free add-ons fetched at install: Yesterhaven, Gas Powered Games' free multiplayer adventure, from the Internet Archive's
+# copy of its installer (not redistributed by this project: downloaded from there and checked), unless it's already in
+# the Mods folder or --no-downloads / DS_NO_DOWNLOADS=1
+YH_URL=https://archive.org/download/DungeonSiegeYesterhaven/DungeonSiegeYesterhaven.exe
+free_mods() {
+  [ -z "$NODL" ] || return 0
+  [ -f "$DATA/mods/Yesterhaven.dsmap" ] && [ -f "$DATA/mods/Yesterhaven.dsres" ] && return 0
+  local f="$DATA/downloads/DungeonSiegeYesterhaven.exe"; mkdir -p "$DATA/downloads" "$DATA/mods"
+  if [ ! -f "$f" ]; then
+    echo "== downloading Yesterhaven (53 MB) from the Internet Archive"
+    curl -fsSL --retry 2 -o "$f.part" "$YH_URL" && mv "$f.part" "$f" || { rm -f "$f.part"; echo "   (download failed; add it later with --yesterhaven)"; return 0; }
+  fi
+  python3 "$HERE/recomp/tools/extract_installer.py" "$f" "$DATA/mods" | sed 's/^/   /' \
+    && echo "== Yesterhaven added to the Mods list (Gas Powered Games' free multiplayer adventure)" \
+    || echo "   ($f is not the expected installer; add Yesterhaven later with --yesterhaven)"
+}
 bundled_mods() { [ -d "$HERE/mods" ] && find "$HERE/mods" -iname '*.dsres' -o -iname '*.dsmap' | grep -q . && mods "$HERE/mods" >/dev/null && echo "== the project's bundled mods added to the Mods list" || true; }
 # Legends of Aranna: its archives go to <data>/expansion, a read-only layer the game sees over its own folder when the
 # expansion is chosen in the launcher (other .dsres files next to them, such as mods, are left out)
@@ -120,11 +143,11 @@ expansion() {
   done
   echo "== Legends of Aranna installed in $DATA/expansion: choose it in the launcher's Game row"
 }
-# The Dungeon Siege Benchmark: its two archives, taken out of GPG's installer (recomp/tools/extract_benchmark.py checks
+# The Dungeon Siege Benchmark: its two archives, taken out of GPG's installer (recomp/tools/extract_installer.py checks
 # it), go to <data>/benchmark, kept apart from the mods: the launcher links them in only for a benchmark run
 benchmark() {
   [ -f "$BENCH" ] || { echo "no such file: $BENCH"; exit 1; }
-  python3 "$HERE/recomp/tools/extract_benchmark.py" "$BENCH" "$DATA/benchmark" | sed 's/^/   /'
+  python3 "$HERE/recomp/tools/extract_installer.py" "$BENCH" "$DATA/benchmark" | sed 's/^/   /'
   echo "== the Dungeon Siege Benchmark is installed: choose \"Benchmark\" in the launcher's Game row"
 }
 GOG_SHA=41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02
@@ -173,7 +196,7 @@ if [ -n "$YH$LOA$MODS$BENCH" ]; then
   [ -z "$LOA" ] || expansion
   [ -z "$MODS" ] || mods "$MODS"
   [ -z "$BENCH" ] || benchmark
-  bundled_mods
+  bundled_mods; free_mods
   [ -n "$GAME$GOG_EXE$STEAM" ] || exit 0
 fi
 if [ -n "$STEAM" ]; then          # the Steam download, copied into the data folder (Steam may clean up its download area)
@@ -275,5 +298,5 @@ fi
 rm -rf "$I"
 codesign --force --deep --sign - "$A" >/dev/null 2>&1 || true
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$A" 2>/dev/null || true
-bundled_mods
+bundled_mods; free_mods
 echo "== done: $A (data in $DATA)"
