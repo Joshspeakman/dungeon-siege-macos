@@ -19,6 +19,7 @@ struct Uniforms {
     int4 xrgb;           // stage 0/1 texture has no alpha channel
     float4x4 tex1;       // texture-1 transform
     int4 s1;             // stage 1: texcoordindex, texturetransformflags, unused, unused
+    float4 shadow;       // x: blur radius in texels for a shadow silhouette (0: none)
 };
 
 struct VIn {
@@ -112,6 +113,11 @@ fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]
     float2 uv0 = in.uv;
     if ((u.a0.z & 0xffff0000) == 0x20000) uv0 = (u.a0.w & 0x100) ? in.tcproj.xy / in.tcproj.z : in.tcproj.xy;   // TCI_CAMERASPACEPOSITION
     float4 texel = u.misc.z ? t0.sample(s0, uv0) : float4(1);
+    if (u.shadow.x > 0) {                // a shadow silhouette: a weighted 3x3 filter softens its edges
+        float2 step = float2(u.shadow.x) / float2(t0.get_width(), t0.get_height());
+        texel = float4(0);
+        for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) texel += t0.sample(s0, uv0 + float2(x, y) * step) * float((x == 0 ? 2 : 1) * (y == 0 ? 2 : 1)) / 16.0;
+    }
     if (u.xrgb.x) texel.a = 1;
     if (u.c0.x != 1) {
         float4 c = op(u.c0.x, arg(u.c0.y, diffuse, current, texel, u.tfactor), arg(u.c0.z, diffuse, current, texel, u.tfactor), diffuse, texel, u.tfactor, current);

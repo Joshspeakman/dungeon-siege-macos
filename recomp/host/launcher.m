@@ -299,6 +299,26 @@ static NSInteger default_distance_index(void)
     NSString *gpu = MTLCreateSystemDefaultDevice().name ?: @"";
     return [gpu containsString:@" Max"] || [gpu containsString:@" Ultra"] ? 3 : 2;
 }
+/* character shadows: the silhouette texture's size (the game's own is 64) and a softening of its edges (renderer.m) */
+static NSArray<NSDictionary *> *shadow_detail_choices(void)
+{
+    return @[@{@"value": @"64", @"label": @"Original", @"note": @"64 pixels, as the game shipped"},
+             @{@"value": @"128", @"label": @"128", @"note": @"Twice the original detail"},
+             @{@"value": @"256", @"label": @"256", @"note": @"Sharp shadows at any resolution (recommended)"},
+             @{@"value": @"512", @"label": @"512", @"note": @"Finer still"},
+             @{@"value": @"1024", @"label": @"1024", @"note": @"The most detail; more GPU memory and work"}];
+}
+static NSArray<NSDictionary *> *shadow_edge_choices(void)
+{
+    return @[@{@"value": @"off", @"label": @"Original", @"note": @"Hard edges, as the game shipped"},
+             @{@"value": @"soft", @"label": @"Soft", @"note": @"Smoothed edges (recommended)"},
+             @{@"value": @"softer", @"label": @"Softer", @"note": @"Wider, softer edges"}];
+}
+static void apply_shadows(NSString *detail, NSString *edges)
+{
+    if (![detail isEqualToString:@"64"]) setenv("DS_SHADOW_RESOLUTION", detail.UTF8String, 1);   /* Original: the game's own value */
+    setenv("DSR_SHADOW_FILTER", edges.UTF8String, 1);
+}
 static NSArray<NSDictionary *> *framerate_choices(void)
 {
     NSInteger hz = NSScreen.mainScreen.maximumFramesPerSecond; if (hz <= 0) hz = 60;
@@ -604,10 +624,12 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
     NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"];
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:plistPath] ?: @{};
-    DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new], *mode = [DSRow new];
+    DSRow *res = [DSRow new], *dist = [DSRow new], *fps = [DSRow new], *mode = [DSRow new], *shd = [DSRow new], *she = [DSRow new];
     res.title = @"Resolution"; res.choices = resolution_choices(); res.index = index_of(res.choices, saved[@"resolution"], 0);
     dist.title = @"View Distance"; dist.choices = distance_choices(); dist.index = index_of(dist.choices, saved[@"viewDistance"], default_distance_index());
     fps.title = @"Frame Rate"; fps.choices = framerate_choices(); fps.index = index_of(fps.choices, saved[@"frameRate"], 0);
+    shd.title = @"Shadow Detail"; shd.choices = shadow_detail_choices(); shd.index = index_of(shd.choices, saved[@"shadowDetail"], 2);
+    she.title = @"Shadow Edges"; she.choices = shadow_edge_choices(); she.index = index_of(she.choices, saved[@"shadowEdges"], 1);
     mode.title = @"Game"; mode.choices = mode_choices(data); mode.index = index_of(mode.choices, saved[@"mode"], 0);
     NSArray<NSDictionary *> *found = mods_found(data);
     NSMutableSet *onBase = mods_enabled(saved, found, NO), *onLoa = mods_enabled(saved, found, YES);
@@ -616,7 +638,8 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSString *(^modFiles)(void) = ^NSString * { return mods_files(found, isLoa() ? onLoa : onBase); };
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
-        if (saved.count) apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data, modFiles());
+        if (saved.count) { apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data, modFiles());
+                           apply_shadows(shd.choices[shd.index][@"value"], she.choices[she.index][@"value"]); }
         return 1;
     }
 
@@ -627,7 +650,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     __block int ustate = updater ? UPD_CHECKING : UPD_NONE; __block NSString *latest = nil;
     upd.choices = update_choice(ustate, branch, built, nil);
     BOOL shotMode = shot != NULL;
-    NSArray<DSRow *> *rows = @[mode, mods, res, dist, fps, upd];
+    NSArray<DSRow *> *rows = @[mode, mods, res, dist, shd, she, fps, upd];
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 700 + 74 * (NSInteger)(rows.count - 5))];
     v.rows = rows; v.hover = v.pressed = HIT_NONE;
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
@@ -700,9 +723,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSString *rv = res.choices[res.index][@"value"], *dv = dist.choices[dist.index][@"value"], *fv = fps.choices[fps.index][@"value"], *mv = mode.choices[mode.index][@"value"];
     NSMutableArray *seenBase = [NSMutableArray array], *seenLoa = [NSMutableArray array];
     for (NSDictionary *m in found) { if ([m[@"games"] intValue] & MOD_BASE) [seenBase addObject:m[@"id"]]; if ([m[@"games"] intValue] & MOD_LOA) [seenLoa addObject:m[@"id"]]; }
-    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv,
+    NSString *sdv = shd.choices[shd.index][@"value"], *sev = she.choices[she.index][@"value"];
+    [@{@"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev,
        mods_key(NO): onBase.allObjects, mods_key(YES): onLoa.allObjects,
        [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv, mv, data, modFiles());
+    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev);
     return 1;
 }
