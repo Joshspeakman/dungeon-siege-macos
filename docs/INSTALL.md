@@ -116,19 +116,34 @@ To uninstall: delete `~/Applications/Dungeon Siege Native.app` (and `Dungeon Sie
 
 ## Playing
 
-Open **Dungeon Siege Native** from `~/Applications` (or Spotlight). The launch window appears first:
+Open **Dungeon Siege Native** from `~/Applications` (or Spotlight). The launch window appears first. The **Game** row is
+at the top; the other settings are grouped under four buttons, each showing its current settings: **Display**,
+**Graphics**, **Mods** (the list of mods, see [MODS.md](MODS.md)) and **Updates**. Display and Graphics open as a panel
+(Back, Escape or a click outside closes it).
+
+Every option of the game's own Options > Video page is here, so it needn't be used: the launcher writes them into the
+game's settings (`prefs.gas`; Legends of Aranna keeps its own) when you press Play, and a change made in the game shows
+up in the launcher next time.
 
 | Setting | Choices |
 |---|---|
 | **Game** | Single Player, or Multiplayer: the game opens on its multiplayer screens (see [MULTIPLAYER.md](MULTIPLAYER.md)); the note shows this Mac's address for other players. **Benchmark**, when installed: Gas Powered Games' benchmark demo, run uncapped (see [BENCHMARK.md](BENCHMARK.md)). |
-| **Resolution** | Your display's size (recommended), its full Retina size, or a standard size that fits. The game's front-end menus are always 800×600 by design and are shown with bars at the sides; the game world uses the chosen resolution. |
-| **View Distance** | Original, Far (125%), Farther (150%, about what the SeeFar mod gives), Very Far (200%), Horizon (250%), Maximum (300%). Higher settings draw much more of the world; Horizon and Maximum can lower the frame rate in the largest outdoor areas. |
-| **Shadow Detail** | The size of each character's shadow silhouette: Original (64 pixels, as shipped), 128, 256 (default), 512, 1024. Larger shadows are sharper, especially at high resolutions, and use a little more GPU memory and time. |
-| **Shadow Edges** | Original (hard edges, as shipped), Soft (default) or Softer: a light filter that smooths the edges of character shadows. |
-| **Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120, 60, 30, or Unlimited (no cap, no vertical sync). |
+| **Display: Resolution** | Your display's size (recommended), its full Retina size, or a standard size that fits. The game's front-end menus are always 800×600 by design and are shown with bars at the sides; the game world uses the chosen resolution. |
+| **Display: View Distance** | Original, Far (125%), Farther (150%, about what the SeeFar mod gives), Very Far (200%), Horizon (250%), Maximum (300%). Higher settings draw much more of the world; Horizon and Maximum can lower the frame rate in the largest outdoor areas. |
+| **Display: Gamma** | The game's gamma correction, 0.5 (darker) to 1.5 (brighter); 1.0 as shipped. |
+| **Graphics: Texture Filtering** | Bilinear (as shipped) or Trilinear: smoother distant textures. |
+| **Graphics: Object Detail** | How much of the small scenery (plants, rocks, clutter) is drawn: Lowest, Low, Medium, High or Full (as shipped). |
+| **Graphics: Shadows** | Which characters cast shadows: Off, Simple (round shadows), Party Complex (true shadows for your party; as shipped) or All Complex. |
+| **Graphics: Shadow Detail** | The size of each character's shadow silhouette: Original (64 pixels, as shipped), 128, 256 (default), 512, 1024. Larger shadows are sharper, especially at high resolutions, and use a little more GPU memory and time. |
+| **Graphics: Shadow Edges** | Original (hard edges, as shipped), Soft (default) or Softer: a light filter that smooths the edges of character shadows. |
+| **Display: Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120, 60, 30, or Unlimited (no cap, no vertical sync). |
 
-Your choices are remembered: next time just press **Play** (or Return). Arrow keys move between and change settings;
-Escape quits.
+Your choices are remembered: next time just press **Play** (or Return). Arrow keys move between and change settings,
+Return opens a group; Escape closes it, or quits.
+
+The banner at the top is Dungeon Siege's key art, downloaded by the installer from Steam's store for this window
+(`~/Games/DungeonSiegeNative/art`; not part of this project). Without it (or with `--no-downloads`) the window shows
+its title plaque instead.
 
 In the game: the mouse or trackpad controls the game's cursor; two-finger click is right click; two-finger scroll
 zooms. All keyboard shortcuts work as on Windows. **Cmd+Tab** switches away, **Cmd+Q** quits.
