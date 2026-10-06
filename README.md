@@ -35,9 +35,10 @@ troubleshooting.
   covers the Yesterhaven map, router port forwarding done for you, and quicker movement response for joining players.
 - **GOG or Steam.** Either edition of 1.11.1 works. The Steam executable has no DRM, and a Steam copy plays with GOG
   players.
-- **A launch window** in the game's style: single player or multiplayer, Legends of Aranna, mods, resolution, view
-  distance, shadows and frame rate, all remembered. **Updates** come from it too: it tells you when a newer version is on
-  GitHub and installs it.
+- **A launch window** in the game's style: single player or multiplayer, Legends of Aranna, mods, and every one of the
+  game's video options (resolution, gamma, texture filtering, object detail, shadows) plus view distance, shadow
+  quality and frame rate, grouped under Display and Graphics, all remembered. **Updates** come from it too: it tells
+  you when a newer version is on GitHub and installs it.
 - **Legends of Aranna**, the expansion, from your own copy's data (`./install.sh --expansion <folder>`).
 - **Mods** chosen per game in the launcher (Yesterhaven, ResolutionFix, UberUI and others; credits in
   [docs/MODS.md](docs/MODS.md)).

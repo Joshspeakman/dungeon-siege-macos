@@ -10,7 +10,8 @@
 #                                      adventure (Yesterhaven.dsmap and Yesterhaven.dsres, found anywhere under <folder>,
 #                                      or taken out of its installer); on its own or with the above. Without it, an
 #                                      install downloads Yesterhaven's installer from the Internet Archive (hash-checked)
-#                                      when the Mods folder doesn't have it yet; --no-downloads skips that.
+#                                      when the Mods folder doesn't have it yet, and the launcher's banner (Dungeon
+#                                      Siege's key art from Steam's store); --no-downloads skips both.
 # install.sh --expansion <folder>      adds Legends of Aranna from your own copy (Expansion.dsres, Expansion.dsmap and
 #                                      ExpVoices.dsres, plus XPRes.dsres/XPMap.dsmap if present, found anywhere under
 #                                      <folder>, e.g. the installed game's DSLOA folder or the disc); only the data is
@@ -127,6 +128,17 @@ free_mods() {
     && echo "== Yesterhaven added to the Mods list (Gas Powered Games' free multiplayer adventure)" \
     || echo "   ($f is not the expected installer; add Yesterhaven later with --yesterhaven)"
 }
+# The launcher's banner: Dungeon Siege's key art from Steam's public store CDN (app 39190), for the launch window on this
+# Mac only (not redistributed by this project); without it the window shows its title plaque. Skipped by --no-downloads.
+ART_URL=https://cdn.cloudflare.steamstatic.com/steam/apps/39190/library_hero.jpg
+launcher_art() {
+  [ -z "$NODL" ] || return 0
+  local f="$DATA/art/banner.jpg"; [ -s "$f" ] && return 0
+  mkdir -p "$DATA/art"
+  if curl -fsSL --retry 2 -o "$f.part" "$ART_URL" && [ "$(head -c 3 "$f.part" | xxd -p)" = ffd8ff ] && [ "$(wc -c < "$f.part")" -gt 50000 ]; then
+    mv "$f.part" "$f"; echo "== the launcher's banner: Dungeon Siege's key art, from Steam's store"
+  else rm -f "$f.part"; echo "   (the launcher's banner couldn't be downloaded; the window shows its title plaque)"; fi
+}
 bundled_mods() { [ -d "$HERE/mods" ] && find "$HERE/mods" -iname '*.dsres' -o -iname '*.dsmap' | grep -q . && mods "$HERE/mods" >/dev/null && echo "== the project's bundled mods added to the Mods list" || true; }
 # Legends of Aranna: its archives go to <data>/expansion, a read-only layer the game sees over its own folder when the
 # expansion is chosen in the launcher (other .dsres files next to them, such as mods, are left out)
@@ -196,7 +208,7 @@ if [ -n "$YH$LOA$MODS$BENCH" ]; then
   [ -z "$LOA" ] || expansion
   [ -z "$MODS" ] || mods "$MODS"
   [ -z "$BENCH" ] || benchmark
-  bundled_mods; free_mods
+  bundled_mods; free_mods; launcher_art
   [ -n "$GAME$GOG_EXE$STEAM" ] || exit 0
 fi
 if [ -n "$STEAM" ]; then          # the Steam download, copied into the data folder (Steam may clean up its download area)
@@ -298,5 +310,5 @@ fi
 rm -rf "$I"
 codesign --force --deep --sign - "$A" >/dev/null 2>&1 || true
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$A" 2>/dev/null || true
-bundled_mods; free_mods
+bundled_mods; free_mods; launcher_art
 echo "== done: $A (data in $DATA)"

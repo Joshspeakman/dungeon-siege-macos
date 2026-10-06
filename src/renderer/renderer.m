@@ -541,7 +541,8 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
                     else if (!(p[10] & 0x20000)) { shadow_fill(r, p[0], dr, p[11]); quad(r, p[0], dr, 0, dr, 1, p[11]); } } break;
     case DSR_PRESENT: r->presented = p[0]; dsr_frame++; r->shadow_pending = 0; r->shadow_active = 0;   // caller presents/commits
         r->present_ts = (size >= 16 && p[3]) ? (((uint64_t)p[2] << 32) | p[1]) / (double)p[3] : -1; return 1;
-    case DSR_GAMMA: if (size >= 1536) { memcpy(r->gamma, p, 1536); r->gamma_dirty = 1; } break;
+    case DSR_GAMMA: if (size >= 1536) { memcpy(r->gamma, p, 1536); r->gamma_dirty = 1;
+        if (getenv("DSR_GAMMALOG")) fprintf(stderr, "dsr: gamma ramp: 64 -> %u, 128 -> %u, 192 -> %u\n", r->gamma[0][64] >> 8, r->gamma[0][128] >> 8, r->gamma[0][192] >> 8); } break;
     default: break;
     }
     return 0;

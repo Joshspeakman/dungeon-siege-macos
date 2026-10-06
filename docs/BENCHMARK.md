@@ -24,7 +24,8 @@ view only for a benchmark run and removed afterwards.
 Choose **Benchmark** in the launch window's Game row and press Play. The demo plays itself and the game quits when it
 ends (Escape ends it early, without results). It runs:
 
-- with your Resolution, View Distance, Shadow Detail and Shadow Edges settings;
+- with your Display and Graphics settings (the base game's: resolution, view distance, gamma, texture filtering,
+  object detail and the shadow settings);
 - without mods, frame cap or vertical sync, so it shows what the Mac can do.
 
 A summary appears afterwards: the average, median and 1% low frame rate (the frame rate that 99% of frames beat) and
