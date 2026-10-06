@@ -354,6 +354,15 @@ static BOOL have_expansion(NSString *data)       /* install.sh --expansion: Lege
 {
     return [NSFileManager.defaultManager fileExistsAtPath:[expansion_dir(data) stringByAppendingPathComponent:@"Resources/Expansion.dsres"]];
 }
+/* install.sh --benchmark: Gas Powered Games' Dungeon Siege Benchmark (Resources/Benchmark.dsres, Maps/BenchmarkMap.dsmap),
+ * kept apart from the mods: linked in only for a benchmark run, as it changes the game's content (and so its multiplayer
+ * identity) */
+static NSString *benchmark_dir(NSString *data) { return [data stringByAppendingPathComponent:@"benchmark"]; }
+static BOOL have_benchmark(NSString *data)
+{
+    NSString *b = benchmark_dir(data); NSFileManager *fm = NSFileManager.defaultManager;
+    return [fm fileExistsAtPath:[b stringByAppendingPathComponent:@"Resources/Benchmark.dsres"]] && [fm fileExistsAtPath:[b stringByAppendingPathComponent:@"Maps/BenchmarkMap.dsmap"]];
+}
 static NSArray<NSDictionary *> *mode_choices(NSString *data)
 {
     NSString *ip = join_addresses();
@@ -363,6 +372,8 @@ static NSArray<NSDictionary *> *mode_choices(NSString *data)
         [a addObject:@{@"value": @"loa", @"label": @"Legends of Aranna", @"note": @"The expansion's campaign, with its own saves"}];
         [a addObject:@{@"value": @"loa-multi", @"label": @"Aranna Multiplayer", @"note": ip ?: @"Legends of Aranna's multiplayer maps"}];
     }
+    if (have_benchmark(data))
+        [a addObject:@{@"value": @"benchmark", @"label": @"Benchmark", @"note": @"GPG's 3-minute demo, run uncapped and without mods"}];
     return a;
 }
 static NSInteger index_of(NSArray<NSDictionary *> *c, NSString *v, NSInteger dflt)
@@ -472,7 +483,8 @@ static BOOL mods_panel(NSWindow *parent, NSString *data, NSArray<NSDictionary *>
 void ds_mods_sync(const char *data_dir)
 {
     const char *e = getenv("DS_MODS"); if (!e) return;
-    NSString *data = @(data_dir), *mods = mods_dir(data); NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *data = @(data_dir), *mods = mods_dir(data), *bench = benchmark_dir(data); NSFileManager *fm = NSFileManager.defaultManager;
+    BOOL bench_on = getenv("DS_BENCHMARK") && have_benchmark(data);
     NSSet *want = [NSSet setWithArray:[[@(e) lowercaseString] componentsSeparatedByString:@","]];
     for (NSString *sub in @[@"Resources", @"Maps"]) {
         NSString *dir = [[data stringByAppendingPathComponent:@"game"] stringByAppendingPathComponent:sub];
@@ -480,6 +492,11 @@ void ds_mods_sync(const char *data_dir)
         for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {          /* our links whose mod is not ticked */
             NSString *path = [dir stringByAppendingPathComponent:f], *dest = [fm destinationOfSymbolicLinkAtPath:path error:nil];
             if (dest && [dest hasPrefix:mods] && ![want containsObject:f.lowercaseString]) [fm removeItemAtPath:path error:nil];
+            if (dest && [dest hasPrefix:bench] && !bench_on) [fm removeItemAtPath:path error:nil];   /* the benchmark's, after its run */
+        }
+        if (bench_on) for (NSString *f in [fm contentsOfDirectoryAtPath:[bench stringByAppendingPathComponent:sub] error:nil]) {
+            NSString *link = [dir stringByAppendingPathComponent:f];
+            if (![fm fileExistsAtPath:link]) [fm createSymbolicLinkAtPath:link withDestinationPath:[[bench stringByAppendingPathComponent:sub] stringByAppendingPathComponent:f] error:nil];
         }
     }
     for (NSString *f in [fm contentsOfDirectoryAtPath:mods error:nil]) {
@@ -508,6 +525,12 @@ static NSArray<NSDictionary *> *mods_choice(NSArray<NSDictionary *> *found, NSSe
 /* the chosen settings as environment for the runtime (read later at start-up) */
 static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode, NSString *data, NSString *mods)
 {
+    BOOL bench = [mode isEqualToString:@"benchmark"] && have_benchmark(data);
+    if (bench) {   /* the benchmark's own map, no mods, no frame cap or vertical sync: what this Mac can do */
+        setenv("DS_BENCHMARK", "1", 1); setenv("DS_MODS", "", 1);
+        const char *old = getenv("DS_ARGS"); NSString *b = @"demo=true map=benchmark_demo teleport=island fpslog=true minfps=0";
+        setenv("DS_ARGS", (old && *old ? [NSString stringWithFormat:@"%s %@", old, b] : b).UTF8String, 1);
+    }
     if (!getenv("DS_MODS")) setenv("DS_MODS", mods.UTF8String, 1);    /* the ticked mods' files, linked in at start-up */
     if ([mode hasPrefix:@"loa"] && have_expansion(data)) setenv("DS_EXPANSION", expansion_dir(data).fileSystemRepresentation, 1);
     if ([mode hasSuffix:@"multi"]) {   /* the game's own switch for its multiplayer screens */
@@ -516,7 +539,7 @@ static void apply(NSString *res, NSString *dist, NSString *fps, NSString *mode, 
     }
     setenv("DS_RESOLUTION", res.UTF8String, 1);
     setenv("DS_DRAW_DISTANCE", dist.UTF8String, 1);
-    if ([fps isEqualToString:@"unlimited"]) { setenv("DSR_FPSCAP", "0", 1); setenv("DSR_VSYNC", "0", 1); }
+    if ([fps isEqualToString:@"unlimited"] || bench) { setenv("DSR_FPSCAP", "0", 1); setenv("DSR_VSYNC", "0", 1); }
     else setenv("DSR_FPSCAP", fps.UTF8String, 1);
 }
 
@@ -634,7 +657,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSArray<NSDictionary *> *found = mods_found(data);
     NSMutableSet *onBase = mods_enabled(saved, found, NO), *onLoa = mods_enabled(saved, found, YES);
     BOOL (^isLoa)(void) = ^BOOL { return [mode.choices[mode.index][@"value"] hasPrefix:@"loa"]; };
-    DSRow *mods = [DSRow new]; mods.title = @"Mods"; mods.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa());
+    BOOL (^isBench)(void) = ^BOOL { return [mode.choices[mode.index][@"value"] isEqualToString:@"benchmark"]; };
+    NSArray *(^modsRow)(void) = ^NSArray * { return isBench() ? @[@{@"value": @"mods", @"label": @"Not used", @"note": @"The benchmark runs without mods"}]
+                                                              : mods_choice(found, isLoa() ? onLoa : onBase, isLoa()); };
+    DSRow *mods = [DSRow new]; mods.title = @"Mods"; mods.choices = modsRow();
     NSString *(^modFiles)(void) = ^NSString * { return mods_files(found, isLoa() ? onLoa : onBase); };
     const char *shot = getenv("DS_LAUNCHER_SHOT");
     if (getenv("DS_NO_LAUNCHER") && !shot) {
@@ -683,10 +709,11 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         }
         check();
     };
-    v.onChange = ^{ mods.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa()); };   /* the Game row decides which set */
+    v.onChange = ^{ mods.choices = modsRow(); };   /* the Game row decides which set */
     __weak DSRow *wm = mods;
     mods.activate = ^{
-        if (mods_panel(wv.window, data, found, isLoa(), isLoa() ? onLoa : onBase)) wm.choices = mods_choice(found, isLoa() ? onLoa : onBase, isLoa());
+        if (isBench()) return;
+        if (mods_panel(wv.window, data, found, isLoa(), isLoa() ? onLoa : onBase)) wm.choices = modsRow();
     };
     NSString *tank = [@(game_dir) stringByAppendingPathComponent:@"Resources/Objects.dsres"], *m = @"art/bitmaps/gui/front_end/menus/main/b_gui_fe_m_mn_3d_";
     CGImageRef stone = raw_image(tank_read(tank, [m stringByAppendingString:@"background-05.raw"]));

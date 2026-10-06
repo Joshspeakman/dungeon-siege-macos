@@ -16,6 +16,9 @@
 #                                      own) found anywhere under <folder> to the Mods list (tick them in the launcher;
 #                                      known ones start ticked). Mods this project may redistribute (mods/) are always
 #                                      added. Credits: docs/MODS.md.
+# install.sh --benchmark <DSBenchmark.EXE>  adds Gas Powered Games' Dungeon Siege Benchmark from its installer (only its
+#                                      two archives are taken out; the installer is not run). Choose "Benchmark" in
+#                                      the launcher's Game row; results go to <data>/Benchmarks. See docs/BENCHMARK.md.
 # install.sh --collection <folder>     everything from one backup folder: the GOG game (offline installer or game
 #                                      folder), Legends of Aranna, Yesterhaven and mods, saves and launcher settings;
 #                                      the game is copied into the data folder, so the backup can be put away again.
@@ -33,7 +36,7 @@
 # installs capstone and unicorn with pip into recomp/.venv).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
+GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; BENCH=""; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
 NIGHTLY=""; AS_NIGHTLY=""; STEAM=""; ARGS=()
 STEAM_SHA=c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab
 STEAM_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_39190/depot_39191"
@@ -43,7 +46,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = --steam ]; then if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then STEAM="$2"; shift 2; else STEAM="$STEAM_DEPOT"; shift; fi; continue; fi
   case "$1" in
     --game-dir) GAME="$2"; shift 2;; --gog-installer) GOG_EXE="$2"; shift 2;; --app-dir) APPS="$2"; shift 2;; --data-dir) DATA="$2"; shift 2;;
-    --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;;
+    --yesterhaven) YH="$2"; shift 2;; --expansion) LOA="$2"; shift 2;; --mods) MODS="$2"; shift 2;; --benchmark) BENCH="$2"; shift 2;;
     --collection) COL="$2"; shift 2;; --save-collection) SAVECOL="$2"; shift 2;;
     *) echo "unknown option $1"; exit 1;;
   esac
@@ -117,6 +120,13 @@ expansion() {
   done
   echo "== Legends of Aranna installed in $DATA/expansion: choose it in the launcher's Game row"
 }
+# The Dungeon Siege Benchmark: its two archives, taken out of GPG's installer (recomp/tools/extract_benchmark.py checks
+# it), go to <data>/benchmark, kept apart from the mods: the launcher links them in only for a benchmark run
+benchmark() {
+  [ -f "$BENCH" ] || { echo "no such file: $BENCH"; exit 1; }
+  python3 "$HERE/recomp/tools/extract_benchmark.py" "$BENCH" "$DATA/benchmark" | sed 's/^/   /'
+  echo "== the Dungeon Siege Benchmark is installed: choose \"Benchmark\" in the launcher's Game row"
+}
 GOG_SHA=41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02
 DOCS="$DATA/drive_c/Users/player/Documents"
 # --save-collection: the game folder, the expansion's archives, the mods, saves and launcher settings, in one folder
@@ -158,10 +168,11 @@ if [ -n "$COL" ]; then
   done
   if [ -f "$COL/Settings/launcher.plist" ] && [ ! -f "$DATA/launcher.plist" ]; then mkdir -p "$DATA"; cp "$COL/Settings/launcher.plist" "$DATA/"; fi
 fi
-if [ -n "$YH$LOA$MODS" ]; then
+if [ -n "$YH$LOA$MODS$BENCH" ]; then
   [ -z "$YH" ] || yesterhaven
   [ -z "$LOA" ] || expansion
   [ -z "$MODS" ] || mods "$MODS"
+  [ -z "$BENCH" ] || benchmark
   bundled_mods
   [ -n "$GAME$GOG_EXE$STEAM" ] || exit 0
 fi
