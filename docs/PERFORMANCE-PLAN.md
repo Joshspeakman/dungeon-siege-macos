@@ -54,6 +54,18 @@ and 6, about 85% with step 5. A flat 120 on an M1 Pro: about 50%, limited mostly
   Every change was checked: random-operation tests against the hardware, the instruction fuzzer, the differential
   check, and the multiplayer digest (still equal to the PC's). Next candidates: the rest of character skinning
   (`0x693f6f`, `0x695c99`, slerp `0x694970`), or keeping the x87 stack in registers in the lifter.
+- **Benchmark hitches (2026-10-06, GPG's benchmark demo, 1728x1117 uncapped, M1 Pro):** two kinds, both in the game
+  thread (the GPU stays at 2-5 ms per frame throughout):
+  - *One-off stalls* when the demo reaches new ground (about 35 s in: 170-280 ms; smaller ones at 129, 142 and
+    147 s). A CPU sample at that moment shows the game reading the new content: its gas/Fuel parser (a recursive
+    walk, `0x448f59`) and the archive data it decompresses on first touch, which arrives as page faults. Part of each
+    fault's cost was our own check that the fault came from recompiled code (`dladdr`, a symbol search, twice per
+    fault: more than the decompression itself); the answer is now cached per code address (`seh.c`). The rest is the
+    original engine's own loading work on its main thread.
+  - *The final battle* (the last 30 s, 25-35 ms frames, which sets the 1% low): about half the game thread is the world
+    update and half the render pass; character skinning is the largest single part (`0x695c99` 13%, `0x693f6f` with
+    the native slerp `0x694970` about 10%). `0x695c99` is a 360-instruction blend routine with many branches and calls:
+    the next candidate for a native version, checked bit for bit like the others.
 - **Dynamic resolution (step 5): not needed.** At this M1 Pro's native 1728x1117 the GPU takes 4.3 ms per frame
   (forest, 150% or 300% view distance; single-frame peaks 7-13 ms). A base M1 has ~2.3x less GPU and a smaller
   screen (1440x900), so about 7 ms against a 60 Hz display's 16.7 ms; the 120 Hz (ProMotion) Macs have Pro/Max/Ultra

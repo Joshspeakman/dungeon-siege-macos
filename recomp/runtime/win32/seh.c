@@ -5,6 +5,7 @@
  * Supported outcomes: ExceptionContinueExecution (the faulting access is retried) and continue-search. "Execute the
  * __except block" needs a non-local jump into recompiled code and is reported as fatal for now. */
 #include "w32.h"
+#include <stdatomic.h>
 #include <signal.h>
 #include <sys/ucontext.h>
 #include <setjmp.h>
@@ -72,6 +73,18 @@ int w32_dispatch(Ctx *c, uint32_t code, uint32_t flags, uint32_t addr, int n, co
 
 /* ---- host faults ---- */
 static struct sigaction old_segv, old_bus;
+/* Is this host address inside recompiled game code (an f_/b_ symbol)? dladdr searches the symbol table, a large share
+ * of a fault's cost when the game streams in archive pages (one fault per page), so each answer is remembered: faults
+ * come from a small set of load and store instructions. One word per entry (address | answer), so threads share it. */
+static int lifted_code(void *p)
+{
+    static _Atomic uintptr_t cache[4096];
+    uintptr_t a = (uintptr_t)p, k = (a >> 2) & 4095, e = atomic_load_explicit(&cache[k], memory_order_relaxed);
+    if (e && (e & ~(uintptr_t)3) == a) return (int)(e & 1);
+    Dl_info d; int ours = dladdr(p, &d) && d.dli_sname && (!strncmp(d.dli_sname, "f_", 2) || !strncmp(d.dli_sname, "b_", 2));
+    if (!(a & 3)) atomic_store_explicit(&cache[k], a | (uintptr_t)ours, memory_order_relaxed);   /* arm64 instructions: 4-byte aligned */
+    return ours;
+}
 static void on_fault(int sig, siginfo_t *si, void *uc)
 {
     uint8_t *a = (uint8_t *)si->si_addr; Ctx *c = w32_cur_ctx;
@@ -81,11 +94,10 @@ static void on_fault(int sig, siginfo_t *si, void *uc)
         uint32_t write = (esr >> 6) & 1;                                         /* data abort: WnR */
         uint32_t info[2] = {write, ga};
         {   /* only faults raised by recompiled game code are the game's; anything else is a runtime bug */
-            Dl_info di, dl; void *pc = (void *)u->uc_mcontext->__ss.__pc, *lr = (void *)u->uc_mcontext->__ss.__lr;
-            #define LIFTED(d) ((d).dli_sname && (!strncmp((d).dli_sname, "f_", 2) || !strncmp((d).dli_sname, "b_", 2)))
-            int ours = dladdr(pc, &di) && LIFTED(di);
-            if (!ours && dladdr(lr, &dl) && LIFTED(dl)) ours = 1;              /* memmove/memset called by recompiled code (rep movs/stos) */
+            Dl_info di = {0}; void *pc = (void *)u->uc_mcontext->__ss.__pc, *lr = (void *)u->uc_mcontext->__ss.__lr;
+            int ours = lifted_code(pc) || lifted_code(lr);                      /* lr: memmove/memset called by recompiled code (rep movs/stos) */
             if (!ours) {
+                dladdr(pc, &di);
                 fprintf(stderr, "recomp: runtime fault: %s of guest %08x in %s (thread %x)\n", write ? "write" : "read", ga,
                         di.dli_sname ? di.dli_sname : "?", w32_tid(c));
                 char what[200]; snprintf(what, sizeof what, "%s of x86 address %08x in %s", write ? "write" : "read", ga, di.dli_sname ? di.dli_sname : "?");
