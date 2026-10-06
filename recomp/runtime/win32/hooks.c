@@ -72,6 +72,12 @@ static void skrit_message(Ctx *c)
 void rt_hook(Ctx *c, uint32_t addr)
 {
     switch (addr) {
+    case 0x0051c8b9: {   /* the hardware profile's shadow_tex_size has just been read (eax): DS_SHADOW_RESOLUTION replaces it
+                          * before it is stored, so the engine's allocation, projection and copy rectangles all agree */
+        const char *v = getenv("DS_SHADOW_RESOLUTION"); char *end; unsigned long n = v ? strtoul(v, &end, 10) : 0;
+        if (v && *v && !*end && (n == 64 || n == 128 || n == 256 || n == 512 || n == 1024)) c->eax = (uint32_t)n;
+        break;
+    }
     case 0x0059000f: mood_loaded(c); break;
     case 0x0061d06c: skrit_message(c); break;
     case 0x004acb46: case 0x005d1fcf: case 0x004036a8: case 0x005a39a6: { extern int loa_active; void loa_hook(Ctx *, uint32_t); if (loa_active) loa_hook(c, addr); break; }

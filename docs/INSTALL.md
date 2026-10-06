@@ -123,6 +123,8 @@ Open **Dungeon Siege Native** from `~/Applications` (or Spotlight). The launch w
 | **Game** | Single Player, or Multiplayer: the game opens on its multiplayer screens (see [MULTIPLAYER.md](MULTIPLAYER.md)); the note shows this Mac's address for other players. |
 | **Resolution** | Your display's size (recommended), its full Retina size, or a standard size that fits. The game's front-end menus are always 800×600 by design and are shown with bars at the sides; the game world uses the chosen resolution. |
 | **View Distance** | Original, Far (125%), Farther (150%, about what the SeeFar mod gives), Very Far (200%), Horizon (250%), Maximum (300%). Higher settings draw much more of the world; Horizon and Maximum can lower the frame rate in the largest outdoor areas. |
+| **Shadow Detail** | The size of each character's shadow silhouette: Original (64 pixels, as shipped), 128, 256 (default), 512, 1024. Larger shadows are sharper, especially at high resolutions, and use a little more GPU memory and time. |
+| **Shadow Edges** | Original (hard edges, as shipped), Soft (default) or Softer: a light filter that smooths the edges of character shadows. |
 | **Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120, 60, 30, or Unlimited (no cap, no vertical sync). |
 
 Your choices are remembered: next time just press **Play** (or Return). Arrow keys move between and change settings;

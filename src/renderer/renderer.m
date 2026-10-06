@@ -8,7 +8,8 @@
 
 int dsr_verbose; long dsr_stat[8]; double dsr_gpu_ms[100000]; int dsr_frame;
 #define MAXSURF 65536
-typedef struct { id<MTLTexture> tex; uint32_t w, h, kind, fmt, level, root; int used; } Surf;
+typedef struct { id<MTLTexture> tex; uint32_t w, h, kind, fmt, level, root; int used, shadow; } Surf;   /* shadow: holds a character's shadow silhouette */
+#define SHADOW_SURF (MAXSURF - 1)   /* the silhouette scratch target (never a game surface id) */
 typedef struct {   // must match shaders.metal Uniforms
     float wvp[16], wv[16], tex0[16];
     float vp[4], fog[4], fogcolor[4], tfactor[4];
@@ -18,6 +19,7 @@ typedef struct {   // must match shaders.metal Uniforms
     int32_t xrgb[4];     // texture stage 0/1 is XRGB (alpha reads as 1)
     float tex1[16];      // texture-1 transform
     int32_t s1[4];       // stage 1: texcoordindex, texturetransformflags
+    float shadow[4];     // x: blur radius in texels for a shadow silhouette (0: none)
 } Uniforms;
 
 struct DSRRenderer {
@@ -25,6 +27,10 @@ struct DSRRenderer {
     Surf s[MAXSURF];
     uint32_t rs[256], tss[8][32]; float xf[32][16]; float vp[6]; uint32_t tex[8];
     uint32_t rt, ds;
+    /* character shadows (DS_SHADOW_RESOLUTION, DSR_SHADOW_FILTER): the game draws each silhouette into a white square
+     * of the back buffer and copies it out; here it goes to a scratch target of its own size instead, so silhouettes
+     * larger than the window are whole, and the copies are marked so their receivers can soften the edges */
+    uint32_t shadow_size, shadow_pending; int shadow_active; float shadow_radius;
     id<MTLCommandBuffer> cb, last_cb; id<MTLRenderCommandEncoder> enc; id<MTLBlitCommandEncoder> blit; uint32_t enc_rt, enc_ds, encoders; uint64_t cb_bytes;
     id<MTLBuffer> ring; uint32_t ring_off, ring_size; id<MTLBuffer> white;
     /* pipeline, depth and sampler states by key: open-addressing tables (keys never 0), no Objective-C boxing per draw */
@@ -64,6 +70,8 @@ DSRRenderer *dsr_renderer_create(id<MTLDevice> dev)
     if (!r->lib) { fprintf(stderr, "shader compile failed: %s\n", err.localizedDescription.UTF8String); exit(1); }
     r->ring_size = 256u << 20; r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
     { uint32_t w = 0xffffffff; r->white = [dev newBufferWithBytes:&w length:16 options:MTLResourceStorageModeShared]; }
+    { const char *f = getenv("DSR_SHADOW_FILTER");        /* character shadows' edges: off (the original), soft, softer */
+      r->shadow_radius = f && !strcmp(f, "soft") ? 0.75f : f && (!strcmp(f, "softer") || !strcmp(f, "wide")) ? 1.5f : 0; }
     for (int k = 0; k < 32; k++) mat_ident(r->xf[k]);
     for (int k = 0; k < 256; k++) r->rs[k] = 0;
     r->rs[7] = 1; r->rs[14] = 1; r->rs[23] = 4; r->rs[22] = 3; r->rs[19] = 2; r->rs[20] = 1; r->rs[25] = 8;   // ZENABLE, ZWRITE, ZFUNC LEQUAL, CULL CCW, SRC ONE, DST ZERO, AFUNC ALWAYS
@@ -157,7 +165,7 @@ static void surface_create(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t id = p[0], w = p[1], h = p[2], kind = p[3], fmt = p[4], parent = p[5], level = p[6];
     if (id >= MAXSURF) return;
-    Surf *s = &r->s[id]; s->tex = nil; s->used = 1; s->w = w; s->h = h; s->kind = kind; s->fmt = fmt; s->level = level; s->root = id;
+    Surf *s = &r->s[id]; s->tex = nil; s->used = 1; s->shadow = 0; s->w = w; s->h = h; s->kind = kind; s->fmt = fmt; s->level = level; s->root = id;
     if (parent && surf(r, parent)) { Surf *root = surf(r, parent); s->tex = root->tex; s->root = parent; return; }   // mip level: shares the root's texture
     if (kind == 3 && parent == 0) {
         uint32_t levels = size >= 32 && p[7] ? p[7] : 1;
@@ -292,6 +300,42 @@ static id<MTLSamplerState> sampler_for(DSRRenderer *r, int st)
     d.mipFilter = mip == 3 ? MTLSamplerMipFilterLinear : mip == 2 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterNotMipmapped;
     s = [r->dev newSamplerStateWithDescriptor:d]; if (r->smp_n < 768) { r->smp_k[h] = key; r->smp_v[h] = s; r->smp_n++; } return s;
 }
+// ---------- character shadows ----------
+static void shadow_scratch_begin(DSRRenderer *r)     /* the silhouettes that follow go to an n x n scratch target */
+{
+    uint32_t n = r->shadow_pending; r->shadow_pending = 0;
+    Surf *s = &r->s[SHADOW_SURF];
+    if (!s->tex || s->w != n) {
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:n height:n mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget; d.storageMode = MTLStorageModePrivate;
+        s->tex = [r->dev newTextureWithDescriptor:d]; s->w = s->h = n; s->kind = 1; s->fmt = 2; s->level = 0; s->root = SHADOW_SURF; s->used = 1;
+    }
+    r->shadow_size = n;
+    int32_t rc[4] = {0, 0, (int32_t)n, (int32_t)n}; quad(r, SHADOW_SURF, rc, 0, rc, 1, 0xffffffffu);
+    r->shadow_active = 1;
+}
+static void shadow_fill(DSRRenderer *r, uint32_t dst, const int32_t *dr, uint32_t color)   /* a fill: the white square? */
+{
+    if (dst != r->rt) return;
+    r->shadow_active = 0;
+    r->shadow_pending = color == 0xffffffffu && dr[0] == 0 && dr[1] == 0 && dr[2] == dr[3] && dr[2] >= 64 && dr[2] <= 1024 ? (uint32_t)dr[2] : 0;
+}
+static uint32_t shadow_blit_source(DSRRenderer *r, uint32_t dst, const int32_t *dr, uint32_t src, const int32_t *sr)
+{
+    Surf *d = surf(r, dst); if (!d || src != r->rt || dst == src) return src;
+    /* the copy of a silhouette out of the back buffer (no Z, a square viewport of the copy's size): marks the texture,
+     * and while the scratch target is active, copies from it instead */
+    if (!r->rs[7] && d->w == d->h && d->w >= 64 && d->w <= 1024 && r->vp[2] == d->w && r->vp[3] == d->h &&
+        sr[2] - sr[0] == (int32_t)d->w && sr[3] - sr[1] == (int32_t)d->h) {
+        if (!d->shadow && getenv("DSR_SHADOW_STATS")) fprintf(stderr, "shadows: silhouette texture %u, %ux%u\n", dst, d->w, d->h);
+        d->shadow = 1;
+    }
+    if (r->shadow_active && d->w == r->shadow_size && d->h == r->shadow_size && sr[0] == 0 && sr[1] == 0 && sr[2] == (int32_t)d->w && sr[3] == (int32_t)d->h) {
+        r->shadow_active = 0; return SHADOW_SURF;
+    }
+    return src;
+}
+
 static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t prim = p[0], fvf = p[1], nv = p[2], ni = p[3], stride = 0, voff, ioff = 0;
@@ -311,12 +355,16 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     }
     if (!nv || 16 + (uint64_t)nv * stride + (uint64_t)ni * 2 > size) { dsr_stat[1]++; return; }   /* 64-bit: no wrap */
     if (prim == 6 && (ni ? ni : nv) < 3) return;                                 /* a fan of fewer than 3: nothing (as D3D) */
-    Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) { dsr_stat[2]++; return; }
+    int rhw = (fvf & 0xe) == 4;
+    if (r->shadow_pending && !rhw && !r->rs[7] && r->vp[2] == r->shadow_pending && r->vp[3] == r->shadow_pending) shadow_scratch_begin(r);
+    int shadow = r->shadow_active && !rhw && !r->rs[7] && r->vp[2] == r->shadow_size && r->vp[3] == r->shadow_size;
+    uint32_t T = shadow ? SHADOW_SURF : r->rt, D = shadow ? 0 : r->ds;          /* a silhouette: the scratch target */
+    Surf *rt = surf(r, T), *ds = surf(r, D); if (!rt) { dsr_stat[2]++; return; }
     id<MTLRenderPipelineState> pso = pipeline_for(r, fvf, ds != NULL); if (!pso) { dsr_stat[3]++; return; }
-    id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); if (!e) { dsr_stat[4]++; return; }
+    id<MTLRenderCommandEncoder> e = enc_for(r, T, D); if (!e) { dsr_stat[4]++; return; }
     void *vdst = ring_alloc(r, nv * stride, &voff); memcpy(vdst, p + 4, nv * stride);
     if (ni) { void *idst = ring_alloc(r, ni * 2, &ioff); memcpy(idst, (const uint8_t *)(p + 4) + nv * stride, ni * 2); }
-    e = enc_for(r, r->rt, r->ds);   // ring_alloc may have flushed
+    e = enc_for(r, T, D);   // ring_alloc may have flushed
     Uniforms u; memset(&u, 0, sizeof u);
     float wv[16]; mat_mul(wv, r->xf[1], r->xf[2]); mat_mul(u.wvp, wv, r->xf[3]); memcpy(u.wv, wv, 64); memcpy(u.tex0, r->xf[16], 64); memcpy(u.tex1, r->xf[17], 64);
     u.s1[0] = r->tss[1][11]; u.s1[1] = r->tss[1][24];
@@ -330,8 +378,10 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     Surf *t0 = surf(r, r->tex[0]), *t1 = surf(r, r->tex[1]);
     u.misc[0] = (fvf & 0xe) == 4; u.misc[1] = (fvf & 0x40) != 0; u.misc[2] = t0 != NULL; u.misc[3] = t1 != NULL;
     u.xrgb[0] = t0 && t0->fmt == 2; u.xrgb[1] = t1 && t1->fmt == 2;
+    /* a shadow's receiver pass (multiplied in: ZERO, SRCCOLOR; no depth writes) samples its silhouette softened */
+    if (t0 && t0->shadow && r->shadow_radius > 0 && r->rs[27] && r->rs[19] == 1 && r->rs[20] == 3 && !r->rs[14]) u.shadow[0] = r->shadow_radius * t0->w / 256.0f;
     uint32_t uoff; memcpy(ring_alloc(r, sizeof u, &uoff), &u, sizeof u);   // one copy, read by both stages
-    e = enc_for(r, r->rt, r->ds);                                         // (ring_alloc may have flushed)
+    e = enc_for(r, T, D);                                                 // (ring_alloc may have flushed)
     id<MTLDepthStencilState> dso = depth_for(r);
     if (r->es.pso != pso) { [e setRenderPipelineState:pso]; r->es.pso = pso; }
     if (r->es.dso != dso) { [e setDepthStencilState:dso]; r->es.dso = dso; }
@@ -356,7 +406,7 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
         uint32_t tris = count - 2, ooff; uint16_t *ix = ring_alloc(r, tris * 6, &ooff);
         const uint16_t *src = ni ? (const uint16_t *)((const uint8_t *)(p + 4) + nv * stride) : NULL;
         for (uint32_t k = 0; k < tris; k++) { ix[k * 3] = src ? src[0] : 0; ix[k * 3 + 1] = src ? src[k + 1] : k + 1; ix[k * 3 + 2] = src ? src[k + 2] : k + 2; }
-        e = enc_for(r, r->rt, r->ds);
+        e = enc_for(r, T, D);
         [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:tris * 3 indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ooff];
     } else if (ni) [e drawIndexedPrimitives:pt indexCount:ni indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ioff];
     else [e drawPrimitives:pt vertexStart:0 vertexCount:nv];
@@ -487,8 +537,9 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_UPLOAD_OVER: upload_over(r, p, size); break;
     case DSR_READBACK: readback(r, p); break;
     case DSR_BLT: { int32_t dr[4], sr[4]; memcpy(dr, p + 1, 16); memcpy(sr, p + 6, 16);
-                    if (p[5]) quad(r, p[0], dr, p[5], sr, 0, 0); else if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;
-    case DSR_PRESENT: r->presented = p[0]; dsr_frame++;   // caller presents/commits
+                    if (p[5]) quad(r, p[0], dr, shadow_blit_source(r, p[0], dr, p[5], sr), sr, 0, 0);
+                    else if (!(p[10] & 0x20000)) { shadow_fill(r, p[0], dr, p[11]); quad(r, p[0], dr, 0, dr, 1, p[11]); } } break;
+    case DSR_PRESENT: r->presented = p[0]; dsr_frame++; r->shadow_pending = 0; r->shadow_active = 0;   // caller presents/commits
         r->present_ts = (size >= 16 && p[3]) ? (((uint64_t)p[2] << 32) | p[1]) / (double)p[3] : -1; return 1;
     case DSR_GAMMA: if (size >= 1536) { memcpy(r->gamma, p, 1536); r->gamma_dirty = 1; } break;
     default: break;
