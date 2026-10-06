@@ -6,13 +6,15 @@ native build runs it as an option in the launch window, and as a tool for tuning
 
 ## Install
 
-You need GPG's installer, `DSBenchmark.EXE` (5,319,358 bytes). Nothing from it is in this repository.
+You need GPG's installer, `DSBenchmark.EXE` (5,319,358 bytes), a free download from the time (it's still offered by
+hardware sites such as [Guru3D](https://www.guru3d.com/download/dungeon-siege-pc-benchmark/)). Nothing from it is in this
+repository, and since no site allows automated downloads of it, the installer can't fetch it for you.
 
 ```sh
 ./install.sh --benchmark ~/Downloads/DSBenchmark.EXE
 ```
 
-Only its two archives are taken out (`recomp/tools/extract_benchmark.py`; the installer is not run):
+Only its two archives are taken out (`recomp/tools/extract_installer.py`; the installer is not run):
 `Resources/Benchmark.dsres` and `Maps/BenchmarkMap.dsmap`. They go to `~/Games/DungeonSiegeNative/benchmark`, apart
 from the mods: they change the game's content, and so its identity in multiplayer, so they are linked into the game's
 view only for a benchmark run and removed afterwards.
