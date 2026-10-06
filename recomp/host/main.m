@@ -465,6 +465,39 @@ static void show_report_alert(NSString *title, NSString *path)
     [NSApp activateIgnoringOtherApps:YES];
     if ([al runModal] == NSAlertFirstButtonReturn) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
 }
+/* The Dungeon Siege Benchmark (the launch window's Game: Benchmark, DS_BENCHMARK=1): the game writes each frame's time to
+ * Logs/fps.log; after the run it is kept in <data>/Benchmarks with a summary (average, median, 1% low, worst frame) and
+ * the settings it ran with. */
+static char bench_data[1024];
+static NSString *bench_log(void) { return [NSString stringWithFormat:@"%s/drive_c/Users/player/Documents/Dungeon Siege/Logs/fps.log", bench_data]; }
+static NSString *bench_finish(NSString **summary)
+{
+    NSString *log = [NSString stringWithContentsOfFile:bench_log() encoding:NSISOLatin1StringEncoding error:nil];
+    if (!log) { *summary = @"The benchmark didn't finish, so there are no results (Escape ends a run early)."; return nil; }
+    NSMutableArray<NSNumber *> *dt = [NSMutableArray array]; int rules = 0;
+    for (NSString *line in [log componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        NSString *t = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if ([t hasPrefix:@"-----------"]) { rules++; continue; }
+        if (rules >= 2 && t.length && t.doubleValue > 0) [dt addObject:@(t.doubleValue)];
+    }
+    if (dt.count < 100) { *summary = @"The benchmark didn't finish, so there are no results (Escape ends a run early)."; return nil; }
+    double total = 0, worst = 0; for (NSNumber *n in dt) { total += n.doubleValue; if (n.doubleValue > worst) worst = n.doubleValue; }
+    NSArray<NSNumber *> *s = [dt sortedArrayUsingSelector:@selector(compare:)];
+    double median = s[s.count / 2].doubleValue, p99 = s[(NSUInteger)((double)s.count * 0.99)].doubleValue;
+    const char *res = getenv("DS_RESOLUTION"), *dist = getenv("DS_DRAW_DISTANCE"), *shd = getenv("DS_SHADOW_RESOLUTION"), *edg = getenv("DSR_SHADOW_FILTER");
+    NSString *gpu = MTLCreateSystemDefaultDevice().name ?: @"?";
+    *summary = [NSString stringWithFormat:@"Average %.1f fps, median %.1f fps, 1%% low %.1f fps, worst frame %.1f ms\n%lu frames in %.1f s",
+                dt.count / total, 1 / median, 1 / p99, worst * 1000, (unsigned long)dt.count, total];
+    NSString *settings = [NSString stringWithFormat:@"GPU %@; resolution %s; view distance %s%%; shadow detail %s, edges %s; no frame cap or vertical sync; build %s",
+                          gpu, res ? res : "default", dist ? dist : "100", shd ? shd : "original", edg ? edg : "original", DS_BUILD];
+    NSString *dir = [NSString stringWithFormat:@"%s/Benchmarks", bench_data];
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSDateFormatter *f = [NSDateFormatter new]; f.dateFormat = @"yyyy-MM-dd HH.mm.ss";
+    NSString *path = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"Benchmark %@.txt", [f stringFromDate:NSDate.date]]];
+    [[NSString stringWithFormat:@"Dungeon Siege Benchmark\n%@\n%@\n\n%@", *summary, settings, log] writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [NSFileManager.defaultManager removeItemAtPath:bench_log() error:nil];   /* the game appends: the next run starts clean */
+    return path;
+}
 static void *game_thread(void *arg)
 {
     (void)arg; char msg[256];
@@ -472,12 +505,20 @@ static void *game_thread(void *arg)
     fprintf(stderr, "DungeonSiegeNative: game ended: %s\n", msg);
     game_running = 0;
     const char *rp = !strncmp(msg, "fault", 5) ? w32_crash_last_path() : 0;
-    NSString *path = rp ? @(rp) : nil;
+    NSString *path = rp ? @(rp) : nil, *bsum = nil, *bpath = nil;
+    if (bench_data[0] && !path) { NSString *s = nil; bpath = bench_finish(&s); bsum = s; fprintf(stderr, "DungeonSiegeNative: benchmark: %s%s%s\n", bsum.UTF8String, bpath ? "\n  saved to " : "", bpath ? bpath.UTF8String : ""); }
     dispatch_async(dispatch_get_main_queue(), ^{
         capture(0);
         if (path && !test_mode) {
             [win orderOut:nil]; [NSApp setPresentationOptions:NSApplicationPresentationDefault];
             show_report_alert(@"Dungeon Siege stopped unexpectedly.", path);
+        }
+        if (bsum && !test_mode) {
+            [win orderOut:nil]; [NSApp setPresentationOptions:NSApplicationPresentationDefault];
+            NSAlert *al = [NSAlert new]; al.messageText = bpath ? @"Benchmark finished" : @"Benchmark not completed"; al.informativeText = bsum;
+            if (bpath) [al addButtonWithTitle:@"Show Results"];
+            [al addButtonWithTitle:@"OK"]; [NSApp activateIgnoringOtherApps:YES];
+            if ([al runModal] == NSAlertFirstButtonReturn && bpath) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:bpath]]];
         }
         exit((int)code);
     });
@@ -527,6 +568,10 @@ int main(int argc, char **argv)
                 if (!ds_launcher_run(game, data)) return 0;
             }
             void ds_mods_sync(const char *data_dir); ds_mods_sync(data);   /* the ticked mods into the game's folders */
+        }
+        if (getenv("DS_BENCHMARK") && atoi(getenv("DS_BENCHMARK"))) {   /* a benchmark run: results kept after it (bench_finish) */
+            snprintf(bench_data, sizeof bench_data, "%s", data);
+            [NSFileManager.defaultManager removeItemAtPath:bench_log() error:nil];
         }
         {   /* draw distance in percent of the original (the launch window sets it); hides an installed SeeFar mod */
             extern float w32_draw_distance; extern int w32_hide_seefar; const char *dd = getenv("DS_DRAW_DISTANCE");
