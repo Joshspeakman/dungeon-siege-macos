@@ -139,7 +139,7 @@ up in the launcher next time.
 | **Display: Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120, 60, 30, or Unlimited (no cap, no vertical sync). |
 
 Your choices are remembered: next time just press **Play** (or Return). Arrow keys move between and change settings,
-Return opens a group; Escape closes it, or quits.
+Return opens a group and closes it again; Escape closes it, or quits.
 
 The banner at the top is Dungeon Siege's key art, downloaded by the installer from Steam's store for this window
 (`~/Games/DungeonSiegeNative/art`; not part of this project). Without it (or with `--no-downloads`) the window shows
