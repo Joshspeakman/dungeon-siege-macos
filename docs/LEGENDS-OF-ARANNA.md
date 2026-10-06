@@ -80,6 +80,9 @@ Not done yet, or simplified:
   Aranna ones.
 - The "Attack Area" key (Shift) attacks what is under the pointer, or the ground there, like the base game's Attack key;
   the original expansion's exact behaviour may differ.
+- The portraits' orange "attacked off-screen" warning (an expansion-only indicator) is kept hidden: the base engine's
+  party manager never updates it, so it would otherwise stay lit on healthy characters. The health warning,
+  unconscious and death indicators are unaffected.
 - `RSSetGold` is called by one expansion script but does not exist in any version of the engine; the original
   expansion reports the same script error.
 

@@ -750,6 +750,9 @@ static void ui_expansion_fixups(Ctx *c)
     sell_button_text(c);
     for (int i = 1; i <= 8; i++) {   /* the "transformed" mark on the portraits of transformed party members */
         snprintf(n, sizeof n, "awp_transformed_portrait_%d", i); ui_show_window(c, n, i <= np && is_transformed(c, m[i - 1]));
+        /* ShowGroup reveals this expansion-only orange warning, but the base party manager never updates it: kept
+         * hidden until offscreen-attack tracking exists (health warning, unconscious and death overlays are separate) */
+        snprintf(n, sizeof n, "awp_portrait_offscreen_attack_%d", i); ui_hide_window(c, n);
         snprintf(n, sizeof n, "multi_inventory_dsx_pack_animal_%d", i); ui_hide_group(c, n);
     }
     ui_hide_group(c, "dsx_pack_animal_inventory");
