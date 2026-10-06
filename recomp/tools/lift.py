@@ -19,6 +19,9 @@ CC = {'o': 'CC_O', 'no': 'CC_NO', 'b': 'CC_B', 'ae': 'CC_AE', 'e': 'CC_E', 'ne':
 # Points where the native build adds behaviour (runtime/win32/hooks.c). Each is an instruction boundary; the hook sees
 # the registers and memory as the original code would, and does nothing unless its feature is turned on.
 HOOKS = {
+    0x006960b1: 'vertex lighting loop of a mesh by one light (native, runtime/win32/native.c)',
+    0x00696139: 'vertex darkening loop of a mesh by a negative light (native)',
+    0x006961ac: 'after the two light loops (native: DS_NATIVE_CHECK=1 compares them with the original)',
     0x0051c8b9: 'hardware profile: GetAttributeInt("shadow_tex_size") returned (DS_SHADOW_RESOLUTION)',
     0x0064e928: 'renderer constructed with a 64-pixel shadow size (DS_SHADOW_RESOLUTION)',
     0x0059000f: 'mood loaded: scale fog and frustum (draw distance)',

@@ -82,6 +82,7 @@ void rt_hook(Ctx *c, uint32_t addr)
         if (getenv("DS_HOOKLOG")) fprintf(stderr, "hook: shadow size %lu (%s %08x)\n", n, addr == 0x0051c8b9 ? "profile" : "renderer", c->esi);
         break;
     }
+    case 0x006960b1: case 0x00696139: case 0x006961ac: { int native_hook(Ctx *, uint32_t); native_hook(c, addr); break; }   /* native vertex lighting */
     case 0x0059000f: mood_loaded(c); break;
     case 0x0061d06c: skrit_message(c); break;
     case 0x004acb46: case 0x005d1fcf: case 0x004036a8: case 0x005a39a6: { extern int loa_active; void loa_hook(Ctx *, uint32_t); if (loa_active) loa_hook(c, addr); break; }
