@@ -357,6 +357,7 @@ static void draw_text(NSString *s, NSFont *f, NSColor *c, NSRect r, NSTextAlignm
 static NSArray<NSDictionary *> *resolution_choices(void)
 {
     NSScreen *s = NSScreen.mainScreen; int W = (int)s.frame.size.width, H = (int)s.frame.size.height; double sc = s.backingScaleFactor;
+    if (@available(macOS 12.0, *)) H -= (int)s.safeAreaInsets.top;   /* full screen sits below a notch */
     NSMutableArray *a = [NSMutableArray array]; NSMutableSet *seen = [NSMutableSet set];
     void (^add)(int, int, NSString *) = ^(int w, int h, NSString *note) {
         NSString *v = [NSString stringWithFormat:@"%dx%d", w, h]; if ([seen containsObject:v]) return; [seen addObject:v];

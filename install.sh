@@ -294,7 +294,8 @@ cat > "$A/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.11.1</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.role-playing-games</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <key>GCSupportsGameMode</key><true/>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>Dungeon Siege looks for and hosts multiplayer games on your local network.</string>
