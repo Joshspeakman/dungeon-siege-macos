@@ -74,7 +74,9 @@ DSRRenderer *dsr_renderer_create(id<MTLDevice> dev)
     r->dev = dev; r->q = [dev newCommandQueue];
     r->lib = [dev newLibraryWithSource:shader_source() options:nil error:&err];
     if (!r->lib) { fprintf(stderr, "shader compile failed: %s\n", err.localizedDescription.UTF8String); exit(1); }
-    r->ring_size = 256u << 20; r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
+    r->ring_size = 256u << 20;
+    { const char *mb = getenv("DSR_RINGMB"); if (mb && atoi(mb) >= 4 && atoi(mb) <= 256) r->ring_size = (uint32_t)atoi(mb) << 20; }   /* development: a small ring wraps often */
+    r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
     { uint32_t w = 0xffffffff; r->white = [dev newBufferWithBytes:&w length:16 options:MTLResourceStorageModeShared]; }
     { const char *f = getenv("DSR_SHADOW_FILTER");        /* character shadows' edges: off (the original), soft, softer */
       r->shadow_radius = f && !strcmp(f, "soft") ? 0.75f : f && (!strcmp(f, "softer") || !strcmp(f, "wide")) ? 1.5f : 0; }
@@ -145,6 +147,15 @@ static void *ring_alloc(DSRRenderer *r, uint32_t n, uint32_t *off)
         r->ring_off = 0;
     }
     *off = r->ring_off; r->ring_off += n; r->cb_bytes += n; return (uint8_t *)r->ring.contents + *off;
+}
+/* Room for everything one draw takes from the ring (vertices, indices, uniforms, a fan's indices), made before the draw
+ * sets any encoder state: a wrap in the middle of a draw commits, which ends the encoder, and the draw then went to a
+ * new encoder without its pipeline (a crash in the GPU driver; in Dungeon Siege II's effects path every few minutes). */
+static void ring_room(DSRRenderer *r, uint64_t n)
+{
+    n += 6 * 256;                                   /* each allocation rounds up to 256 */
+    if (n > r->ring_size) return;
+    if (r->ring_off + n > r->ring_size) { commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted]; r->ring_off = 0; }
 }
 static id<MTLBlitCommandEncoder> blit_enc(DSRRenderer *r)
 {
@@ -381,6 +392,7 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     }
     if (!nv || 16 + (uint64_t)nv * stride + (uint64_t)ni * 2 > size) { dsr_stat[1]++; return; }   /* 64-bit: no wrap */
     if (prim == 6 && (ni ? ni : nv) < 3) return;                                 /* a fan of fewer than 3: nothing (as D3D) */
+    ring_room(r, (uint64_t)nv * stride + (uint64_t)ni * 2 + sizeof(Uniforms) + (uint64_t)(ni ? ni : nv) * 6);
     int rhw = (fvf & 0xe) == 4;
     if (r->shadow_pending && !rhw && !r->rs[7] && r->vp[2] == r->shadow_pending && r->vp[3] == r->shadow_pending) shadow_scratch_begin(r);
     int shadow = r->shadow_active && !rhw && !r->rs[7] && r->vp[2] == r->shadow_size && r->vp[3] == r->shadow_size;
