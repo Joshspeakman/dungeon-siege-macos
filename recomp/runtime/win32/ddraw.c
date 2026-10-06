@@ -574,6 +574,10 @@ static int mode_list(uint32_t (*out)[2])
     for (size_t k = 0; k < sizeof std / sizeof *std; k++) if (std[k][0] <= W && std[k][1] <= H) { out[n][0] = std[k][0]; out[n][1] = std[k][1]; n++; }
     out[n][0] = W; out[n][1] = H; n++;
     if (w32_screen_scale > 1.01) { out[n][0] = (uint32_t)(W * w32_screen_scale + 0.5); out[n][1] = (uint32_t)(H * w32_screen_scale + 0.5); n++; }
+    {   /* the resolution the launcher chose (with an interface size, the display's divided by it: e.g. 1152x745) */
+        const char *r = getenv("DS_RESOLUTION"); unsigned rw, rh;
+        if (r && sscanf(r, "%ux%u", &rw, &rh) == 2 && rw >= 640 && rh >= 480 && rw <= 8192 && rh <= 8192) { out[n][0] = rw; out[n][1] = rh; n++; }
+    }
     for (int a = 0; a < n; a++) for (int b = a + 1; b < n; b++)                        /* by size, without duplicates */
         if (out[b][0] * out[b][1] < out[a][0] * out[a][1] || (out[b][0] * out[b][1] == out[a][0] * out[a][1] && out[b][0] < out[a][0])) {
             uint32_t t0 = out[a][0], t1 = out[a][1]; out[a][0] = out[b][0]; out[a][1] = out[b][1]; out[b][0] = t0; out[b][1] = t1; }
