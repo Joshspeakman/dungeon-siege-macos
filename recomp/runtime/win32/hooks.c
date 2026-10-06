@@ -72,10 +72,14 @@ static void skrit_message(Ctx *c)
 void rt_hook(Ctx *c, uint32_t addr)
 {
     switch (addr) {
-    case 0x0051c8b9: {   /* the hardware profile's shadow_tex_size has just been read (eax): DS_SHADOW_RESOLUTION replaces it
-                          * before it is stored, so the engine's allocation, projection and copy rectangles all agree */
+    case 0x0051c8b9:     /* the hardware profiles' shadow_tex_size has just been read (eax) */
+    case 0x0064e928: {   /* the renderer's constructor has just set its shadow size ([esi+0x690]) to 64 */
+        /* DS_SHADOW_RESOLUTION replaces both, so the engine's allocation, projection and copy rectangles all agree; the
+         * 2002 profiles match no Mac GPU, so on a Mac the constructor's value is the one that stays */
         const char *v = getenv("DS_SHADOW_RESOLUTION"); char *end; unsigned long n = v ? strtoul(v, &end, 10) : 0;
-        if (v && *v && !*end && (n == 64 || n == 128 || n == 256 || n == 512 || n == 1024)) c->eax = (uint32_t)n;
+        if (!(v && *v && !*end && (n == 64 || n == 128 || n == 256 || n == 512 || n == 1024))) break;
+        if (addr == 0x0051c8b9) c->eax = (uint32_t)n; else rt_w32(G_MEM, c->esi + 0x690u, (uint32_t)n);
+        if (getenv("DS_HOOKLOG")) fprintf(stderr, "hook: shadow size %lu (%s %08x)\n", n, addr == 0x0051c8b9 ? "profile" : "renderer", c->esi);
         break;
     }
     case 0x0059000f: mood_loaded(c); break;
