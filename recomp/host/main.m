@@ -273,10 +273,25 @@ static void key_event(uint16_t code, int down, int repeat)
 
 /* A borderless window cannot become the key window by default, so it would get no keyboard events (only the mouse,
  * which goes to the window under the pointer). */
+/* The full-screen window's frame. AppKit asks a full-screen window for it through these four (private) methods, and
+ * the same answer from all of them keeps it across hiding and showing the app too. The launcher's Notch row: around
+ * (DS_NOTCH=around) the whole display, the camera housing over the picture's top centre; otherwise the area below it
+ * (AppKit would move this borderless window below the notch without making it shorter, its bottom off the screen). */
+static int notch_around(void) { static int v = -1; if (v < 0) v = getenv("DS_NOTCH") && !strcmp(getenv("DS_NOTCH"), "around"); return v; }
 @interface GameWindow : NSWindow @end
 @implementation GameWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
+- (NSRect)gameFrame
+{
+    NSRect f = (self.screen ?: NSScreen.mainScreen).frame;
+    if (@available(macOS 12.0, *)) if (!notch_around()) f.size.height -= (self.screen ?: NSScreen.mainScreen).safeAreaInsets.top;
+    return f;
+}
+- (NSRect)_frameForFullScreenMode { return self.gameFrame; }
+- (NSRect)_tileFrameForFullScreen { return self.gameFrame; }
+- (NSRect)_fullScreenTileFrame { return self.gameFrame; }
+- (NSRect)_visibleTileFrameForFullScreen { return self.gameFrame; }
 @end
 @interface GameView : NSView @end
 @implementation GameView
@@ -549,6 +564,35 @@ static void on_objc_exception(NSException *e)
     w32_crash_report("crash", r, 0, 0);
 }
 
+/* Opened from Finder (no arguments): the app's own settings, written by install.sh in Contents/Resources/launch.plist
+ * (game folder, data folder, log name, updater), do what the generated launcher script does. The executable has to be
+ * this binary, not a script: macOS only recognises a game, and so only turns on Game Mode, for a bundle whose
+ * executable is the program itself. DS_GAME_DIR and DS_NATIVE_DATA still override the folders. */
+static int bundle_launch(const char *argv0, const char **exe, const char **game, const char **data)
+{
+    NSString *bin = [@(argv0) stringByDeletingLastPathComponent], *res = [bin stringByAppendingPathComponent:@"../Resources"].stringByStandardizingPath;
+    NSDictionary *cfg = [NSDictionary dictionaryWithContentsOfFile:[res stringByAppendingPathComponent:@"launch.plist"]];
+    if (!cfg[@"game"] || !cfg[@"data"]) return 0;
+    NSString *g = getenv("DS_GAME_DIR") ? @(getenv("DS_GAME_DIR")) : cfg[@"game"], *d = getenv("DS_NATIVE_DATA") ? @(getenv("DS_NATIVE_DATA")) : cfg[@"data"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtPath:[d stringByAppendingPathComponent:@"drive_c/Users/player/Documents"] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *log = [d stringByAppendingPathComponent:[cfg[@"log"] ?: @"DungeonSiegeNative" stringByAppendingString:@".log"]];
+    if ([[fm attributesOfItemAtPath:log error:nil] fileSize] > 5000000) {                        /* keep the log small: previous one as .old */
+        NSString *old = [[log stringByDeletingPathExtension] stringByAppendingString:@".old.log"];
+        [fm removeItemAtPath:old error:nil]; [fm moveItemAtPath:log toPath:old error:nil];
+    }
+    freopen(log.fileSystemRepresentation, "a", stderr);
+    setenv("DS_LOG_FILE", log.fileSystemRepresentation, 1);                                      /* crash reports attach this log */
+    NSString *upd = [bin stringByAppendingPathComponent:@"update"];
+    if ([fm isExecutableFileAtPath:upd] && cfg[@"branch"]) {                                       /* the launcher's Updates row */
+        setenv("DS_UPDATER", upd.fileSystemRepresentation, 1); setenv("DS_UPDATE_BRANCH", [cfg[@"branch"] UTF8String], 1);
+        setenv("DS_BUILT_COMMIT", [cfg[@"built"] ?: @"" UTF8String], 1);
+    }
+    *exe = strdup([res stringByAppendingPathComponent:cfg[@"exe"] ?: @"DungeonSiege.exe"].fileSystemRepresentation);
+    *game = strdup(g.fileSystemRepresentation); *data = strdup(d.fileSystemRepresentation);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -558,6 +602,7 @@ int main(int argc, char **argv)
             else if (!strcmp(argv[k], "--game")) game = argv[k + 1];
             else if (!strcmp(argv[k], "--data")) data = argv[k + 1];
         }
+        if (!exe && !game && !data) bundle_launch(argv[0], &exe, &game, &data);
         if (!exe || !game || !data) { fprintf(stderr, "usage: DungeonSiegeNative --exe <DungeonSiege.exe> --game <game folder> --data <data folder>\n"); return 1; }
         NSString *bin = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
         snprintf(dsr_snapshot_path, sizeof dsr_snapshot_path, "%s/dsr_snapshot.bin", bin.UTF8String);
@@ -565,7 +610,6 @@ int main(int argc, char **argv)
         snprintf(drive_c, sizeof drive_c, "%s/drive_c", data); snprintf(overlay, sizeof overlay, "%s/game", data);
         mkdir(data, 0755); mkdir(drive_c, 0755); mkdir(overlay, 0755);
         NSRect sf = NSScreen.mainScreen.frame; w32_screen_w = (int)sf.size.width; w32_screen_h = (int)sf.size.height;
-        if (@available(macOS 12.0, *)) if (!getenv("DS_BORDERLESS")) w32_screen_h -= (int)NSScreen.mainScreen.safeAreaInsets.top;   /* below the notch */
         w32_screen_scale = NSScreen.mainScreen.backingScaleFactor;
         init_keymap();
         {   /* the launch window (resolution, view distance, frame rate) unless in test mode */
@@ -576,6 +620,7 @@ int main(int argc, char **argv)
             }
             void ds_mods_sync(const char *data_dir); ds_mods_sync(data);   /* the ticked mods into the game's folders */
         }
+        if (@available(macOS 12.0, *)) if (!getenv("DS_BORDERLESS") && !notch_around()) w32_screen_h -= (int)NSScreen.mainScreen.safeAreaInsets.top;   /* full screen below a notch (the launcher's Notch row) */
         if (getenv("DS_BENCHMARK") && atoi(getenv("DS_BENCHMARK"))) {   /* a benchmark run: results kept after it (bench_finish) */
             snprintf(bench_data, sizeof bench_data, "%s", data);
             [NSFileManager.defaultManager removeItemAtPath:bench_log() error:nil];

@@ -283,6 +283,11 @@ export DS_LOG_FILE="\$L"                                    # crash reports atta
 exec "\$B/DungeonSiegeNative" --exe "\$B/../Resources/DungeonSiege.exe" --game "\$GAME" --data "\$DATA" 2>>"\$DATA/$APP_LOG.log"
 LAUNCH
 chmod +x "$A/Contents/MacOS/launcher"
+# The app's executable is the game itself (macOS recognises a game, and turns on Game Mode, only for a bundle whose
+# executable is the program): it reads these settings when opened (the launcher script above is for the terminal)
+P="$A/Contents/Resources/launch.plist"; plutil -create xml1 "$P"
+plutil -insert game -string "$GAME" "$P"; plutil -insert data -string "$DATA" "$P"; plutil -insert log -string "$APP_LOG" "$P"
+plutil -insert exe -string DungeonSiege.exe "$P"; plutil -insert branch -string "$U_BRANCH" "$P"; plutil -insert built -string "$U_BUILT" "$P"
 cat > "$A/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -290,7 +295,7 @@ cat > "$A/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundleDisplayName</key><string>$APP_SHOWN</string>
   <key>CFBundleIdentifier</key><string>io.github.dungeon-siege-macos.$APP_ID</string>
-  <key>CFBundleExecutable</key><string>launcher</string>
+  <key>CFBundleExecutable</key><string>DungeonSiegeNative</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.11.1</string>
