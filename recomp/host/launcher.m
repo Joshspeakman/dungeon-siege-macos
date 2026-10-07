@@ -128,7 +128,12 @@ enum { BANNER_H = 252, TOP_Y = 270 };
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { return YES; }
 - (NSArray<DSRow *> *)rows { return self.open >= 0 ? self.sections[self.open].rows : self.top; }
 - (NSInteger)items { return (NSInteger)self.rows.count + (self.open >= 0 ? 0 : (NSInteger)self.sections.count); }   /* what the keyboard moves between */
-- (NSRect)flyRect { NSRect b = self.bounds; return NSMakeRect(40, 168, b.size.width - 80, b.size.height - 268); }
+- (NSRect)flyRect   /* an open group's panel: above Back and Play, taller (reaching up into the banner) when its rows need it */
+{
+    NSRect b = self.bounds; CGFloat h = b.size.height - 268, need = 80 + 74 * (CGFloat)(self.open >= 0 ? self.sections[self.open].rows.count : 0);
+    CGFloat grow = MIN(MAX(need - h, 0), 60);
+    return NSMakeRect(40, 168 - grow, b.size.width - 80, h + grow);
+}
 - (NSRect)rowRect:(NSInteger)k { CGFloat y = self.open >= 0 ? self.flyRect.origin.y + 70 : TOP_Y + 14; return NSMakeRect(70, y + 74 * k, self.bounds.size.width - 140, 64); }
 - (NSRect)arrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + 6, 30, 30); }
 - (NSRect)valueRect:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 9, 262, 30); }
