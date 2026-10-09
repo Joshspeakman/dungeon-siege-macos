@@ -104,6 +104,9 @@ static int http(const char *url, const char *action, const char *body, char *out
     struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &a.sin_addr) != 1) return -1;
     int s = socket(AF_INET, SOCK_STREAM, 0); if (s < 0) return -1;
+#ifdef SO_NOSIGPIPE
+    { int one = 1; setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one); }   /* a router closing early must not kill the game */
+#endif
     struct timeval tv = {2, 0}; setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     if (connect(s, (struct sockaddr *)&a, sizeof a)) { close(s); return -1; }
     char req[4096]; int rl;
