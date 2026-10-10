@@ -177,7 +177,7 @@ launch window: [LEGENDS-OF-ARANNA.md](LEGENDS-OF-ARANNA.md).
 
 ## Not supported
 
-- The Steam and disc versions of Dungeon Siege as the base game (the recompiler needs the GOG 1.11.1 executable).
+- Base-game versions other than the supported GOG and Steam 1.11.1 executables.
 - `DSLOA.exe` itself: the expansion's data runs on the GOG engine instead.
 
 ## For developers

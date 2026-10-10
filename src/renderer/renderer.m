@@ -140,10 +140,21 @@ static void commit(DSRRenderer *r)
 }
 // Long resource-only stretches (level loading) would otherwise pile thousands of encoders into one command buffer.
 static void maybe_commit(DSRRenderer *r) { if (r->cb && (r->encoders > 512 || r->cb_bytes > (64u << 20))) commit(r); }
+static void ring_grow(DSRRenderer *r, uint64_t need)
+{
+    if (need <= r->ring_size) return;
+    uint64_t size = MAX((uint64_t)r->ring_size * 2, (need + 255) & ~255ull);
+    if (size > UINT32_MAX) { fprintf(stderr, "dsr: upload ring request too large: %llu\n", (unsigned long long)need); exit(1); }
+    commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted];
+    id<MTLBuffer> buffer = [r->dev newBufferWithLength:(NSUInteger)size options:MTLResourceStorageModeShared];
+    if (!buffer) { fprintf(stderr, "dsr: cannot grow upload ring to %llu bytes\n", (unsigned long long)size); exit(1); }
+    r->ring = buffer; r->ring_size = (uint32_t)size; r->ring_off = 0;
+}
 static void *ring_alloc(DSRRenderer *r, uint32_t n, uint32_t *off)
 {
+    ring_grow(r, ((uint64_t)n + 255) & ~255ull);
     n = (n + 255) & ~255u;
-    if (r->ring_off + n > r->ring_size) {   // wrap: make sure the GPU is done with the old contents
+    if ((uint64_t)r->ring_off + n > r->ring_size) {   // wrap: make sure the GPU is done with the old contents
         commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted];
         r->ring_off = 0;
     }
@@ -155,8 +166,8 @@ static void *ring_alloc(DSRRenderer *r, uint32_t n, uint32_t *off)
 static void ring_room(DSRRenderer *r, uint64_t n)
 {
     n += 6 * 256;                                   /* each allocation rounds up to 256 */
-    if (n > r->ring_size) return;
-    if (r->ring_off + n > r->ring_size) { commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted]; r->ring_off = 0; }
+    ring_grow(r, n);
+    if ((uint64_t)r->ring_off + n > r->ring_size) { commit(r); if (r->last_cb) [r->last_cb waitUntilCompleted]; r->ring_off = 0; }
 }
 static id<MTLBlitCommandEncoder> blit_enc(DSRRenderer *r)
 {
