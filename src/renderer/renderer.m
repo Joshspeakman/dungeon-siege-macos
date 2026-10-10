@@ -77,7 +77,8 @@ DSRRenderer *dsr_renderer_create(id<MTLDevice> dev)
     r->ring_size = 256u << 20;
     { const char *mb = getenv("DSR_RINGMB"); if (mb && atoi(mb) >= 4 && atoi(mb) <= 256) r->ring_size = (uint32_t)atoi(mb) << 20; }   /* development: a small ring wraps often */
     r->ring = [dev newBufferWithLength:r->ring_size options:MTLResourceStorageModeShared];
-    { uint32_t w = 0xffffffff; r->white = [dev newBufferWithBytes:&w length:16 options:MTLResourceStorageModeShared]; }
+    { const uint32_t white[4] = {0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff};
+      r->white = [dev newBufferWithBytes:white length:sizeof white options:MTLResourceStorageModeShared]; }
     { const char *f = getenv("DSR_SHADOW_FILTER");        /* character shadows' edges: off (the original), soft, softer */
       r->shadow_radius = f && !strcmp(f, "soft") ? 0.75f : f && (!strcmp(f, "softer") || !strcmp(f, "wide")) ? 1.5f : 0; }
     { const char *s = getenv("DSR_RENDER_SCALE"); r->scale = s ? (float)atof(s) : 1; if (!(r->scale >= 1 && r->scale <= 3)) r->scale = 1; }
