@@ -113,6 +113,14 @@ game with "indirect call to unknown code in <image>"; `W32_MILES=native` avoids 
 
 ## Verification
 
+`recomp/tests/runtime_regressions.sh` runs no-game macOS checks for host critical sections and the Metal upload
+ring. A deleted hash-table entry previously hid a still-live colliding mutex; lookup now continues past deleted
+slots before reusing them, and deletion/reuse hold the table lock. ASAN/UBSAN and TSan cover collisions, recursive
+ownership, a full 4,096-entry table and concurrent churn. The Metal test verifies oversized allocation, full-draw
+reservation, a real GPU buffer copy and wrapping under ASAN/UBSAN. Both regressions fail on the old implementations.
+An upload larger than the ring now grows it after outstanding GPU work completes; the normal 256 MB capacity is
+unchanged. These changes fix invalid buffer ranges and lock identity, without claiming an average-FPS increase.
+
 `tests/harness.py` runs original x86 code in [Unicorn](https://www.unicorn-engine.org/) and the recompiled C from
 identical memory and compares all registers, the x87 stack and every writable byte. Unicorn's x87 runs at 53-bit
 precision (control word `0x027f`), so the comparison is **bit-for-bit against the original under the 53-bit x87
