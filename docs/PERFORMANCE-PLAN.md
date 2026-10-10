@@ -76,6 +76,31 @@ and 6, about 85% with step 5. A flat 120 on an M1 Pro: about 50%, limited mostly
 - **Defaults:** view distance starts at Very Far (200%) on Max and Ultra chips, Farther (150%) elsewhere; the frame
   rate already follows the display.
 
+## October 2026 visual and pacing audit (M1 Pro)
+
+The capped-frame wait previously spun for up to the final 2 ms of every frame. It now uses short sleeps until
+roughly 200 microseconds before the same deadline, then spins. A standalone thread-CPU measurement at 60/120 Hz
+fell from 1.316/0.965 ms per frame to 0.221/0.089 ms. Scheduling noise makes that microbenchmark unsuitable for
+claiming tighter frame latency; live farm checks maintained 60 and 120 FPS, with typical longest frames of
+16.8 and 8.4 ms respectively. CPU samples showed the busy clock loop falling from 115/1616 samples to 11/1648.
+This reduces waiting overhead; it does not speed up an uncapped CPU-bound battle. Sampling itself briefly stalls
+the process, so its interval is excluded from the pacing observations.
+
+The Metal shadow tests now cover every supported silhouette size, both smoothing strengths, square ordinary
+backbuffer captures and textures reused after a shadow. A texture is tagged only after the white-fill, silhouette
+draw and matching full-copy sequence; ordinary portraits/UI captures are not filtered merely because their size
+and depth state resemble a shadow. The live 1280×720 farm and forest saves maintained 60 FPS with GPU time
+around 2.5–3.4 ms using 256/Soft shadows. These are M1 Pro measurements, not validation on every supported Mac.
+
+Background test-mode focus changes no longer pause the guest game. Normal interactive focus handling is unchanged.
+
+The full GPG benchmark at 1728×1117, 150% view distance, 256/Soft shadows and uncapped rendering was comparable to
+the installed `260fbc7` nightly under the same settings: installed/revised averages 115.6/116.8 FPS, medians
+139.3/138.8 FPS, 1% lows 32.0/31.8 FPS, and worst frame 166.6 ms in both runs. These single runs establish no
+meaningful uncapped speedup. The final battle remains limited by the game thread while GPU work is roughly
+3–6 ms; further battle optimization needs a separate measured change. Earlier benchmark numbers above used a
+different run and should not be treated as a matched comparison with these results.
+
 ## Reinstalling
 
 Everything here is code in this repository; settings it adds are defaults the app chooses itself. After a reinstall,
