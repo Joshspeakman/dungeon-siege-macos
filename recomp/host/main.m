@@ -278,10 +278,14 @@ static void key_event(uint16_t code, int down, int repeat)
  * (DS_NOTCH=around) the whole display, the camera housing over the picture's top centre; otherwise the area below it
  * (AppKit would move this borderless window below the notch without making it shorter, its bottom off the screen). */
 static int notch_around(void) { static int v = -1; if (v < 0) v = getenv("DS_NOTCH") && !strcmp(getenv("DS_NOTCH"), "around"); return v; }
+/* macOS full screen keeps a window below the camera housing whatever it asks for, so around the notch the game is a
+ * screen-sized borderless window instead (the Dock and menu bar hidden while it is in front) */
+static int borderless(void) { return getenv("DS_BORDERLESS") || notch_around(); }
 @interface GameWindow : NSWindow @end
 @implementation GameWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
+- (NSRect)constrainFrameRect:(NSRect)r toScreen:(NSScreen *)sc { return borderless() ? r : [super constrainFrameRect:r toScreen:sc]; }   /* over the menu bar and notch */
 - (NSRect)gameFrame
 {
     NSRect f = (self.screen ?: NSScreen.mainScreen).frame;
@@ -399,7 +403,10 @@ static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visibl
             if (test_mode) [win orderBack:nil];
             else {
                 [win makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; capture(1);
-                if (getenv("DS_BORDERLESS")) [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];   /* the old way: a screen-sized window */
+                if (borderless()) {   /* a screen-sized window, the Dock and menu bar hidden: around the notch, or DS_BORDERLESS */
+                    [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
+                    [win setFrame:(win.screen ?: NSScreen.mainScreen).frame display:YES];
+                }
                 else enter_fullscreen();
             }
         }
@@ -620,7 +627,7 @@ int main(int argc, char **argv)
             }
             void ds_mods_sync(const char *data_dir); ds_mods_sync(data);   /* the ticked mods into the game's folders */
         }
-        if (@available(macOS 12.0, *)) if (!getenv("DS_BORDERLESS") && !notch_around()) w32_screen_h -= (int)NSScreen.mainScreen.safeAreaInsets.top;   /* full screen below a notch (the launcher's Notch row) */
+        if (@available(macOS 12.0, *)) if (!borderless()) w32_screen_h -= (int)NSScreen.mainScreen.safeAreaInsets.top;   /* full screen below a notch (the launcher's Notch row) */
         if (getenv("DS_BENCHMARK") && atoi(getenv("DS_BENCHMARK"))) {   /* a benchmark run: results kept after it (bench_finish) */
             snprintf(bench_data, sizeof bench_data, "%s", data);
             [NSFileManager.defaultManager removeItemAtPath:bench_log() error:nil];
