@@ -189,6 +189,7 @@ static void cmd_end(void)
 }
 static uint64_t now_us(void) { static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb); return mach_absolute_time() * tb.numer / tb.denom / 1000; }
 /* Frame cadence (DSR_FPSCAP, default auto: 120 or 60 from the game's own work per frame). */
+#include "frame_wait.h"
 static double cap_period_ms = -1; static int cap_auto;
 static void cmd_cap_wait(void)
 {
@@ -217,7 +218,7 @@ static void cmd_cap_wait(void)
     }
     uint64_t period = (uint64_t)(cap_period_ms * 1000);
     if (!deadline) deadline = t;
-    if (t < deadline) { while ((t = now_us()) < deadline) { if (deadline - t > 2000) usleep(1000); } }
+    if (t < deadline) ds_frame_wait_until(deadline, now_us);
     else if (t - deadline > period) deadline = t;
     deadline += period;
     released = now_us();

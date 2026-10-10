@@ -204,6 +204,8 @@ static void surface_upload(DSRRenderer *r, const uint32_t *p, uint32_t size)
     Surf *s = surf(r, p[0]); if (!s || s->fmt == 3) return;
     uint32_t x = p[1], y = p[2], w = p[3], h = p[4], pitch = p[5], off;
     if (!w || !h || 24 + (uint64_t)pitch * h > size) return;                     /* 64-bit: no wrap */
+    s->shadow = 0;                                                            /* CPU pixels replace the silhouette */
+    if (p[0] == r->rt) r->shadow_pending = r->shadow_active = 0;
     if (s->sc != 1) {                                                            /* a scaled target: its pixels go to a stage first */
         if ((uint64_t)x + w > s->w || (uint64_t)y + h > s->h) return;
         Surf *g = &r->s[STAGE_SURF];
@@ -353,22 +355,26 @@ static void shadow_scratch_begin(DSRRenderer *r)     /* the silhouettes that fol
 }
 static void shadow_fill(DSRRenderer *r, uint32_t dst, const int32_t *dr, uint32_t color)   /* a fill: the white square? */
 {
+    Surf *d = surf(r, dst); if (d) d->shadow = 0;
     if (dst != r->rt) return;
     r->shadow_active = 0;
     r->shadow_pending = color == 0xffffffffu && dr[0] == 0 && dr[1] == 0 && dr[2] == dr[3] && dr[2] >= 64 && dr[2] <= 1024 ? (uint32_t)dr[2] : 0;
 }
 static uint32_t shadow_blit_source(DSRRenderer *r, uint32_t dst, const int32_t *dr, uint32_t src, const int32_t *sr)
 {
-    Surf *d = surf(r, dst); if (!d || src != r->rt || dst == src) return src;
-    /* the copy of a silhouette out of the back buffer (no Z, a square viewport of the copy's size): marks the texture,
-     * and while the scratch target is active, copies from it instead */
-    if (!r->rs[7] && d->w == d->h && d->w >= 64 && d->w <= 1024 && r->vp[2] == d->w && r->vp[3] == d->h &&
-        sr[2] - sr[0] == (int32_t)d->w && sr[3] - sr[1] == (int32_t)d->h) {
-        if (!d->shadow && getenv("DSR_SHADOW_STATS")) fprintf(stderr, "shadows: silhouette texture %u, %ux%u\n", dst, d->w, d->h);
-        d->shadow = 1;
-    }
-    if (r->shadow_active && d->w == r->shadow_size && d->h == r->shadow_size && sr[0] == 0 && sr[1] == 0 && sr[2] == (int32_t)d->w && sr[3] == (int32_t)d->h) {
-        r->shadow_active = 0; return SHADOW_SURF;
+    Surf *d = surf(r, dst); if (!d) return src;
+    int was_shadow = d->shadow; d->shadow = 0;
+    if (src != r->rt || dst == src) return src;
+    /* Only the observed white-fill / silhouette draw / full copy sequence identifies a shadow.
+     * Portrait and UI copies can have the same size, viewport and disabled Z. */
+    int silhouette = r->shadow_active && !r->rs[7] && !r->vp[0] && !r->vp[1] &&
+        d->w == r->shadow_size && d->h == r->shadow_size && r->vp[2] == d->w && r->vp[3] == d->h &&
+        sr[0] == 0 && sr[1] == 0 && sr[2] == (int32_t)d->w && sr[3] == (int32_t)d->h &&
+        dr[0] == 0 && dr[1] == 0 && dr[2] == (int32_t)d->w && dr[3] == (int32_t)d->h;
+    r->shadow_active = r->shadow_pending = 0;
+    if (silhouette) {
+        if (!was_shadow && getenv("DSR_SHADOW_STATS")) fprintf(stderr, "shadows: silhouette texture %u, %ux%u\n", dst, d->w, d->h);
+        d->shadow = 1; return SHADOW_SURF;
     }
     return src;
 }
@@ -394,10 +400,13 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     if (prim == 6 && (ni ? ni : nv) < 3) return;                                 /* a fan of fewer than 3: nothing (as D3D) */
     ring_room(r, (uint64_t)nv * stride + (uint64_t)ni * 2 + sizeof(Uniforms) + (uint64_t)(ni ? ni : nv) * 6);
     int rhw = (fvf & 0xe) == 4;
-    if (r->shadow_pending && !rhw && !r->rs[7] && r->vp[2] == r->shadow_pending && r->vp[3] == r->shadow_pending) shadow_scratch_begin(r);
-    int shadow = r->shadow_active && !rhw && !r->rs[7] && r->vp[2] == r->shadow_size && r->vp[3] == r->shadow_size;
+    if (r->shadow_pending && !rhw && !r->rs[7] && !r->vp[0] && !r->vp[1] && r->vp[2] == r->shadow_pending && r->vp[3] == r->shadow_pending) shadow_scratch_begin(r);
+    r->shadow_pending = 0;
+    int shadow = r->shadow_active && !rhw && !r->rs[7] && !r->vp[0] && !r->vp[1] && r->vp[2] == r->shadow_size && r->vp[3] == r->shadow_size;
+    if (!shadow) r->shadow_active = 0;
     uint32_t T = shadow ? SHADOW_SURF : r->rt, D = shadow ? 0 : r->ds;          /* a silhouette: the scratch target */
     Surf *rt = surf(r, T), *ds = surf(r, D); if (!rt) { dsr_stat[2]++; return; }
+    rt->shadow = 0;
     id<MTLRenderPipelineState> pso = pipeline_for(r, fvf, ds != NULL); if (!pso) { dsr_stat[3]++; return; }
     id<MTLRenderCommandEncoder> e = enc_for(r, T, D); if (!e) { dsr_stat[4]++; return; }
     void *vdst = ring_alloc(r, nv * stride, &voff); memcpy(vdst, p + 4, nv * stride);
@@ -466,6 +475,7 @@ static void clear(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t flags = p[0], color = p[1]; float z; memcpy(&z, &p[2], 4);
     Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) return;
+    if (flags & 1) { rt->shadow = 0; r->shadow_pending = r->shadow_active = 0; }
     if (dsr_verbose) fprintf(stderr, "clear flags %x color %08x rt %u (%ux%u fmt %u usage %lx) ds %u vp %.0f %.0f %.0f %.0f\n", flags, color, r->rt, rt->w, rt->h, rt->fmt, (unsigned long)rt->tex.usage, r->ds, r->vp[0], r->vp[1], r->vp[2], r->vp[3]);
     int32_t full[4] = {(int32_t)r->vp[0], (int32_t)r->vp[1], (int32_t)(r->vp[0] + (r->vp[2] ? r->vp[2] : rt->w)), (int32_t)(r->vp[1] + (r->vp[3] ? r->vp[3] : rt->h))};
     full[0] = full[0] > 0 ? full[0] : 0; full[1] = full[1] > 0 ? full[1] : 0;
@@ -584,7 +594,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_VIEWPORT: r->vp[0] = p[0]; r->vp[1] = p[1]; r->vp[2] = p[2]; r->vp[3] = p[3]; memcpy(&r->vp[4], p + 4, 8); break;
     case DSR_CLEAR: clear(r, p, size); break;
     case DSR_DRAW: draw(r, p, size); break;
-    case DSR_SET_RT: r->rt = p[0]; r->ds = p[1]; break;
+    case DSR_SET_RT: if (r->rt != p[0]) r->shadow_pending = r->shadow_active = 0; r->rt = p[0]; r->ds = p[1]; break;
     case DSR_SURFACE_CREATE: surface_create(r, p, size); break;
     case DSR_SURFACE_DESTROY: if (p[0] < MAXSURF) { r->s[p[0]].used = 0; r->s[p[0]].tex = nil; } break;
     case DSR_SURFACE_UPLOAD: surface_upload(r, p, size); break;

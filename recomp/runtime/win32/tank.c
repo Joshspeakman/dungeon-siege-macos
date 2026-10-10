@@ -18,6 +18,7 @@ static uint16_t u16(const uint8_t *d, size_t o) { uint16_t v; memcpy(&v, d + o, 
 
 int tank_read(const char *archive, const char *path, uint8_t **out, size_t *outlen)
 {
+    *out = NULL; *outlen = 0;
     int fd = open(archive, O_RDONLY); if (fd < 0) return -1;
     struct stat st; if (fstat(fd, &st) || st.st_size < 32) { close(fd); return -1; }
     size_t n = (size_t)st.st_size; const uint8_t *d = mmap(0, n, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
@@ -53,23 +54,39 @@ int tank_read(const char *archive, const char *path, uint8_t **out, size_t *outl
         full[0] = 0;
         for (int i = np - 1; i >= 0 && len < sizeof full; i--) len += (size_t)snprintf(full + len, sizeof full - len, "%s%s", parts[i], i ? "/" : "");
         if (len >= sizeof full || strcasecmp(full, path)) continue;
-        if (size > (256u << 20)) continue;
+        if (size > (256u << 20) || fmt > 1) continue;
         uint8_t *buf = calloc(1, size ? size : 1); if (!buf) continue;
-        if (fmt == 0) { if (IN((uint64_t)dataoff + foff, size)) memcpy(buf, d + dataoff + foff, size); }
+        if (fmt == 0) {
+            if (!IN((uint64_t)dataoff + foff, size)) { free(buf); continue; }
+            memcpy(buf, d + (uint64_t)dataoff + foff, size);
+        }
         else {
-            uint32_t o2 = (o + 30 + nlen + 1 + 3) & ~3u; if (!IN(o2, 8)) { free(buf); continue; }
-            uint32_t chunk = u32(d, o2 + 4), nch = chunk ? (size + chunk - 1) / chunk : 0, w = 0;
+            /* Records are padded relative to their own start. Saves place the index after compressed
+             * data, so its absolute file offset need not be aligned. */
+            uint64_t o2 = o64 + ((30u + nlen + 1u + 3u) & ~3u);
+            if (!IN(o2, 8)) { free(buf); continue; }
+            uint32_t chunk = u32(d, o2 + 4), w = 0;
+            uint64_t nch = chunk ? ((uint64_t)size + chunk - 1) / chunk : 0;
             o2 += 8;
-            if (!IN(o2, 16ull * nch)) nch = 0;
-            for (uint32_t ch = 0; ch < nch && w <= size; ch++) {
+            if (!chunk || !IN(o2, 16ull * nch)) { free(buf); continue; }
+            int valid = 1;
+            for (uint64_t ch = 0; ch < nch; ch++) {
                 uint32_t usz = u32(d, o2 + 16 * ch), csz = u32(d, o2 + 16 * ch + 4), extra = u32(d, o2 + 16 * ch + 8), coff = u32(d, o2 + 16 * ch + 12);
                 uint64_t at = (uint64_t)dataoff + foff + coff;
-                if (!IN(at, (uint64_t)csz + extra)) break;
+                if (!IN(at, (uint64_t)csz + extra) || usz > size - w || extra > usz) { valid = 0; break; }
                 const uint8_t *raw = d + at;
-                if (csz < usz) { uLongf dl = size - w; uncompress(buf + w, &dl, raw, csz); w += (uint32_t)dl; }
-                else { uint32_t c = usz < size - w ? usz : size - w; memcpy(buf + w, raw, c); w += c; }
-                if (extra && (uint64_t)w + extra <= size) { memcpy(buf + w, raw + csz, extra); w += extra; }
+                uint32_t plain = usz - extra; /* the uncompressed size includes the raw tail */
+                if (csz < usz) {
+                    uLongf dl = plain;
+                    if (uncompress(buf + w, &dl, raw, csz) != Z_OK || dl != plain) { valid = 0; break; }
+                } else {
+                    if (csz != usz || extra) { valid = 0; break; }
+                    memcpy(buf + w, raw, plain);
+                }
+                w += plain;
+                if (extra) { memcpy(buf + w, raw + csz, extra); w += extra; }
             }
+            if (!valid || w != size) { free(buf); continue; }
         }
         *out = buf; *outlen = size; rc = 0;
     }

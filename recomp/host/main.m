@@ -472,8 +472,8 @@ static void type_text(NSString *text)
 
 @interface AppDelegate : NSObject <NSApplicationDelegate> @end
 @implementation AppDelegate
-- (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; if (win.visible) capture(1); post(0x1c, 1, 0); }
-- (void)applicationDidResignActive:(NSNotification *)n { (void)n; capture(0); post(0x1c, 0, 0); }
+- (void)applicationDidBecomeActive:(NSNotification *)n { (void)n; if (test_mode) return; if (win.visible) capture(1); post(0x1c, 1, 0); }
+- (void)applicationDidResignActive:(NSNotification *)n { (void)n; if (test_mode) return; capture(0); post(0x1c, 0, 0); }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s { (void)s; return NSTerminateNow; }
 @end
 

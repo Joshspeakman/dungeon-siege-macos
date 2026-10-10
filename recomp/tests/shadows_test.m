@@ -3,7 +3,7 @@
 //  2. DSR_SHADOW_FILTER softens a silhouette's edges where its receiver pass samples it, and leaves an identical texture
 //     that is not a silhouette untouched.
 // Build and run from src/renderer (the renderer reads shaders.metal from the working directory):
-//   clang -fobjc-arc -framework Metal -framework QuartzCore -framework Foundation -I ../dsr ../../recomp/tests/shadows_test.m renderer.m -o /tmp/shadows_test
+//   clang -fobjc-arc -framework Metal -framework QuartzCore -framework Foundation -I . -I ../dsr ../../recomp/tests/shadows_test.m renderer.m -o /tmp/shadows_test
 //   (cd src/renderer && /tmp/shadows_test)
 #import <Metal/Metal.h>
 #include <assert.h>
@@ -52,12 +52,15 @@ static void silhouette(uint32_t n)   /* the game's sequence: white square on the
 }
 static void silhouette_check(void)
 {
-    init(800, 600, "off"); silhouette(1024);
-    uint32_t *px = malloc(1024 * 1024 * 4); assert(px); read_surface(2, 1024, 1024, px);
-    assert((px[700 * 1024 + 512] & 0xffffff) == 0);          /* below the 600-line back buffer: still drawn */
-    assert((px[900 * 1024 + 512] & 0xffffff) == 0xffffff);
-    assert((px[512 * 1024 + 100] & 0xffffff) == 0xffffff);
-    free(px); puts("1024 silhouette with an 800x600 back buffer is whole: passed");
+    for (uint32_t n = 64; n <= 1024; n *= 2) {
+        init(800, 600, "off"); silhouette(n);
+        uint32_t *px = malloc(n * n * 4); assert(px); read_surface(2, n, n, px);
+        assert((px[(n * 11 / 16) * n + n / 2] & 0xffffff) == 0); /* at 1024 this is below the 600-line back buffer */
+        assert((px[(n * 7 / 8) * n + n / 2] & 0xffffff) == 0xffffff);
+        assert((px[(n / 2) * n + n / 8] & 0xffffff) == 0xffffff);
+        free(px);
+    }
+    puts("64/128/256/512/1024 silhouettes with an 800x600 back buffer are whole: passed");
 }
 static void filtered_scene(const char *filter, int tagged, uint32_t *px)
 {
@@ -69,10 +72,10 @@ static void filtered_scene(const char *filter, int tagged, uint32_t *px)
     quad(shifted, 0xffffffff);
     read_surface(1, 256, 256, px);
 }
-static void filter_check(void)
+static void filter_check(const char *filter)
 {
     uint32_t *orig = malloc(256 * 256 * 4), *soft = malloc(256 * 256 * 4), *other = malloc(256 * 256 * 4); assert(orig && soft && other);
-    filtered_scene("off", 1, orig); filtered_scene("soft", 1, soft); filtered_scene("soft", 0, other);
+    filtered_scene("off", 1, orig); filtered_scene(filter, 1, soft); filtered_scene(filter, 0, other);
     assert(!memcmp(orig, other, 256 * 256 * 4));           /* not a silhouette: unfiltered */
     unsigned changed = 0;
     for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) if (orig[y * 256 + x] != soft[y * 256 + x]) {
@@ -84,12 +87,35 @@ static void filter_check(void)
     free(orig); free(soft); free(other);
     puts("the filter changes silhouette edges only; an identical texture that is not one is untouched: passed");
 }
+static void ordinary_copy(const char *filter, int reused, uint32_t *px)
+{
+    init(256, 256, filter);
+    if (reused) silhouette(256); else surface(2, 256, 256, 1);
+    /* A portrait/UI capture can have the same square viewport, size and disabled Z as a shadow copy.
+     * Without the white-fill / silhouette producer sequence it must remain an ordinary image,
+     * including when it overwrites a surface that previously held a silhouette. */
+    viewport(256, 256); clear();
+    const float mesh[] = {-.5, -.5, .5, .5, -.5, .5, -.5, .5, .5, .5, .5, .5}; quad(mesh, 0xff000000);
+    uint32_t copy[] = {2, 0, 0, 256, 256, 1, 0, 0, 256, 256, 0, 0}; cmd(DSR_BLT, copy, sizeof copy);
+    clear(); stage(1, 2); stage(2, 2); stage(16, 2); stage(17, 2);
+    binding(2); state(27, 1); state(19, 1); state(20, 3);
+    quad(square, 0xffffffff); read_surface(1, 256, 256, px);
+}
+static void ordinary_copy_check(void)
+{
+    uint32_t *orig = malloc(256 * 256 * 4), *soft = malloc(256 * 256 * 4); assert(orig && soft);
+    ordinary_copy("off", 0, orig);
+    ordinary_copy("soft", 0, soft); assert(!memcmp(orig, soft, 256 * 256 * 4));
+    ordinary_copy("soft", 1, soft); assert(!memcmp(orig, soft, 256 * 256 * 4));
+    free(orig); free(soft);
+    puts("ordinary square back-buffer copies and reused surfaces are not shadow-filtered: passed");
+}
 int main(void)
 {
     @autoreleasepool {
         setbuf(stdout, NULL);
         assert(!posix_memalign((void **)&rb_area, 16384, 1024 * 1024 * 4));
-        silhouette_check(); filter_check();
+        silhouette_check(); filter_check("soft"); filter_check("softer"); ordinary_copy_check();
     }
     return 0;
 }
