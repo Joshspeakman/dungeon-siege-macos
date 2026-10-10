@@ -92,3 +92,18 @@ recompiled like the rest; Escape skips each one, as in the original.
 
 Report anything that differs from the original on Windows; the crash and freeze reports in
 `~/Games/DungeonSiegeNative/CrashReports` help.
+
+## Visual reference check (2026-10-10)
+
+The [Arhok supplement](https://github.com/Joshspeakman/dungeon-siege-macos/issues/4) was captured from an installed
+Windows `DSLOA.exe` 1.50 under Wine 11.19/WineD3D on Prime, at 800x600. The capture session left that executable
+unchanged, but no publisher checksum or installer was available to authenticate its earlier provenance. It is a
+qualified comparison, not an authenticated retail build or native Windows test. The Mac continues to use the base
+1.11.1 engine with the expansion extensions described above; it does not run that executable.
+
+All five expansion resource/map hashes match. With optional mods absent, the supplied new BaselineLOA save loads
+in an isolated Mac profile. At original view distance, 64-pixel shadow detail, Shadow Edges Off, Trilinear texture filtering and centered
+gamma, the Arhok opening reproduces the lit portrait, snowy ground, darker walls, snow sprites and long foreground
+character shadow. The save loads paused; resume briefly to populate snow particles and refresh dynamic shadows
+after changing their setting. Particle and notification phases vary. The supplemental clip is not a performance
+benchmark and covers no open water; the separate base-game farm reference covers water.

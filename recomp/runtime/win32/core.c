@@ -204,24 +204,7 @@ IMPL(kernel32, GlobalMemoryStatus)
 }
 
 /* ---- critical sections (host recursive mutexes keyed by the guest address) ---- */
-typedef struct CS { uint32_t addr; pthread_mutex_t m; } CS;
-#define NCS 4096
-static CS cstab[NCS]; static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
-static CS *cs_find(uint32_t a, int create)
-{
-    uint32_t k = (a * 2654435761u) % NCS;
-    pthread_mutex_lock(&cs_lock);
-    for (int n = 0; n < NCS; n++, k = (k + 1) % NCS) {
-        if (cstab[k].addr == a) { pthread_mutex_unlock(&cs_lock); return &cstab[k]; }
-        if (!cstab[k].addr || cstab[k].addr == 1) {
-            if (!create) break;
-            pthread_mutexattr_t at; pthread_mutexattr_init(&at); pthread_mutexattr_settype(&at, PTHREAD_MUTEX_RECURSIVE);
-            pthread_mutex_init(&cstab[k].m, &at); cstab[k].addr = a;
-            pthread_mutex_unlock(&cs_lock); return &cstab[k];
-        }
-    }
-    pthread_mutex_unlock(&cs_lock); return 0;
-}
+#include "critical_sections.h"
 IMPL(kernel32, InitializeCriticalSection)
 {
     uint32_t p = ARG(0); memset(GP(p), 0, 24); rt_w32(G_MEM, p + 4, 0xffffffffu);   /* LockCount -1 */
@@ -229,8 +212,7 @@ IMPL(kernel32, InitializeCriticalSection)
 }
 IMPL(kernel32, DeleteCriticalSection)
 {
-    CS *s = cs_find(ARG(0), 0);
-    if (s) { pthread_mutex_destroy(&s->m); s->addr = 1; }
+    cs_delete(ARG(0));
     RET(0, 1);
 }
 IMPL(kernel32, EnterCriticalSection)
