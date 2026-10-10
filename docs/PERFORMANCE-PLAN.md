@@ -101,6 +101,19 @@ meaningful uncapped speedup. The final battle remains limited by the game thread
 3–6 ms; further battle optimization needs a separate measured change. Earlier benchmark numbers above used a
 different run and should not be treated as a matched comparison with these results.
 
+The renderer initialization audit also found a 16-byte Metal buffer upload whose source was a single 4-byte stack
+value. It now uploads a four-element white array with its actual size. `recomp/tests/renderer_init_test.m` forwards
+the real Metal device through an AddressSanitizer-instrumented copy, reproducing the old stack overread and passing
+the corrected initialization. This is a memory-safety fix; it is not claimed as an FPS improvement.
+
+Prime supplied the original GOG 1.11.1 farm reference in [issue #4](https://github.com/Joshspeakman/dungeon-siege-macos/issues/4).
+Its original executable runs under Wine 11.19/WineD3D at 800×600, rather than native Windows. Matching Mac captures
+at 800×600, 64-pixel unfiltered shadows, trilinear filtering and default gamma show the lit portrait, animated river
+and waterfall, fire/smoke and dynamic color changes. Base resource and map hashes match. Different storm/fire
+phases and the original game's nondeterministic motion prevent exact frame subtraction; these references establish
+visible feature coverage rather than complete pixel parity. The native farm stays near 60 FPS with roughly 2.1–2.3 ms
+GPU time in this configuration.
+
 ## Reinstalling
 
 Everything here is code in this repository; settings it adds are defaults the app chooses itself. After a reinstall,
