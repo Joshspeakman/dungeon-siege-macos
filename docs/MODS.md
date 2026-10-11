@@ -24,13 +24,14 @@ The game folder is never changed: ticked mods are linked into the data folder's 
 
 ## Known mods and credits
 
-These are free mods by their authors, credited here. Only the ones whose authors allow redistribution are included in
-this repository (`mods/`); the others are added from your own copies with `--mods`.
+These are free mods by their authors, credited here. None of the mod archives are in this repository: add them from
+your own copies with `--mods` (Yesterhaven is downloaded for you, see below). `mods/` holds only the readme of the
+Multiplayer Quest Save mod.
 
 | Mod | File | Author | Games | Notes |
 |---|---|---|---|---|
 | Yesterhaven | `Yesterhaven.dsmap`, `Yesterhaven.dsres` | Gas Powered Games | both | Gas Powered Games' free multiplayer adventure. Not in this repository: the installer downloads GPG's own installer for it from the [Internet Archive](https://archive.org/details/DungeonSiegeYesterhaven) (checked by its hash) and takes the two archives out, unless it's already in the Mods folder (`--no-downloads` skips it). `--yesterhaven` also takes your own copy (a folder, or the installer). |
-| Multiplayer Quest Save (beta 6) | `ikkyo_mpsave_beta_6.dsres` | Jason "Ikkyo" Gripp, 2003 | both | Keeps quest progress on the multiplayer maps between sessions. **Included** (unaltered, with its readme): the author permits copying and transmission free of charge, unaltered. |
+| Multiplayer Quest Save (beta 6) | `ikkyo_mpsave_beta_6.dsres` | Jason "Ikkyo" Gripp, 2003 | both | Keeps quest progress on the multiplayer maps between sessions. Not included: add your copy with `--mods`. Its readme is in `mods/`; the author permits copying and transmission free of charge, unaltered. |
 | SeeFar2020 Resolution Fix | `sf_ResolutionFix.dsres` | antonior (SeeFar2020, 2020), after SeeFar by Jeff Kretz and Irwin Ryan (camera code by Ikkyo) | both | Interface layout for wide resolutions. Not included (no redistribution terms from its author); add your copy with `--mods`. |
 | Fairy Fix | `fairyfix.dsres` | unknown | both | A small fix commonly installed with Yesterhaven. Not included (author and terms unknown). |
 | UberUI for Legends of Aranna (0.02) | `UberUI_LoA_v0.02.dsres` | unknown | Legends of Aranna | Extended character screen. Not included (author and terms unknown). |

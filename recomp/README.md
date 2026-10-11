@@ -1,6 +1,6 @@
 # Recompiler: Dungeon Siege as native arm64 code
 
-Static recompilation of the user's own GOG 1.11.1 `DungeonSiege.exe` into C, compiled for Apple Silicon. Nothing
+Static recompilation of the user's own GOG or Steam 1.11.1 `DungeonSiege.exe` into C, compiled for Apple Silicon. Nothing
 derived from the game is committed: `build.sh` regenerates everything locally from the executable. Installing and
 playing: [docs/INSTALL.md](../docs/INSTALL.md).
 

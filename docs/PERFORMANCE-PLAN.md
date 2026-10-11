@@ -106,7 +106,7 @@ value. It now uploads a four-element white array with its actual size. `recomp/t
 the real Metal device through an AddressSanitizer-instrumented copy, reproducing the old stack overread and passing
 the corrected initialization. This is a memory-safety fix; it is not claimed as an FPS improvement.
 
-The reference host supplied the original GOG 1.11.1 farm reference in [issue #4](https://github.com/Joshspeakman/dungeon-siege-macos/issues/4).
+A Linux PC supplied the original GOG 1.11.1 farm reference in [issue #4](https://github.com/Joshspeakman/dungeon-siege-macos/issues/4).
 Its original executable runs under Wine 11.19/WineD3D at 800×600, rather than native Windows. Matching Mac captures
 at 800×600, 64-pixel unfiltered shadows, trilinear filtering and default gamma show the lit portrait, animated river
 and waterfall, fire/smoke and dynamic color changes. Base resource and map hashes match. Different storm/fire

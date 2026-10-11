@@ -96,7 +96,7 @@ Report anything that differs from the original on Windows; the crash and freeze 
 ## Visual reference check (2026-10-10)
 
 The [Arhok supplement](https://github.com/Joshspeakman/dungeon-siege-macos/issues/4) was captured from an installed
-Windows `DSLOA.exe` 1.50 under Wine 11.19/WineD3D on the reference host, at 800x600. The capture session left that executable
+Windows `DSLOA.exe` 1.50 under Wine 11.19/WineD3D on a Linux PC, at 800x600. The capture session left that executable
 unchanged, but no publisher checksum or installer was available to authenticate its earlier provenance. It is a
 qualified comparison, not an authenticated retail build or native Windows test. The Mac continues to use the base
 1.11.1 engine with the expansion extensions described above; it does not run that executable.
