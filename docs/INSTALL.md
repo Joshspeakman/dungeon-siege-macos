@@ -25,9 +25,11 @@ input, files, threads, DirectDraw/Direct3D 7 on Metal, DirectSound on Core Audio
   | Steam 1.11.1 (app 39190, depot 39191) | `c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab` |
 
   Disc versions, other patch levels and modified executables are not supported.
-- About 2 GB of free space and a few minutes for the build (the recompiler is written in Python and installs its two
-  helper packages, `capstone` and `unicorn`, into `recomp/.venv` with pip on first use, so the first install needs an
-  internet connection).
+- Build time and peak disk use have not been verified for a clean install. Allow room for your game files,
+  generated source and object files, the app, and additional update worktrees; time varies with the Mac. Copied or
+  unpacked game files need extra space in the data folder.
+- The recompiler installs `capstone` and `unicorn` into `recomp/.venv` with pip on first use, so the first install
+  needs an internet connection.
 
 Optional: the community mods SeeFar and ResolutionFix work if they are in the game's `Resources` folder, but the app
 has its own view-distance setting, so SeeFar is no longer needed (see below).
@@ -48,6 +50,8 @@ cd dungeon-siege-macos
 This builds and installs **`~/Applications/Dungeon Siege Native.app`**. Keep the cloned folder: the app's Updates row
 rebuilds from it. Give `--game-dir` an absolute path (for example `"$HOME/Games/Dungeon Siege"`, not a relative one): the app remembers it and reads the
 game from it every time it starts.
+
+Keep the clone in a path without spaces: the current compile scripts split source paths on whitespace.
 
 All options:
 
@@ -71,8 +75,8 @@ game option, `install.sh` rebuilds from the game folder the installed app alread
 
 Unless `--no-downloads` is given, an install also downloads, for your Mac only: Gas Powered Games' Yesterhaven
 installer from the [Internet Archive](https://archive.org/details/DungeonSiegeYesterhaven) (53 MB, checked by its hash;
-only its two archives are kept, in the Mods folder), when the Mods folder doesn't have it yet; and the launch window's
-banner art from Steam's store.
+its two archives go into the Mods folder, and the installer is cached in `<data>/downloads`), when the Mods folder
+doesn't have it yet; and the launch window's banner art from Steam's store.
 
 What goes where:
 
@@ -88,17 +92,17 @@ press it:
 
 - The new version is downloaded into `build/stable` (or `build/nightly`) in this folder; your own checkout isn't
   touched.
-- The app is rebuilt from your copy of the game, which takes a few minutes, with a progress window.
-- The app then restarts.
+- The app is rebuilt from your copy of the game, with a progress window.
+- Press Restart when the update finishes.
 
 Your game folder, saves, settings and mods are kept. The output goes to `update.log` in the data folder. This needs
-the git clone the app was installed from, still in the same place; otherwise the row says *Not available*. *Couldn't
-check* means GitHub wasn't reachable (press it to retry).
+the git clone the app was installed from, still in the same place. A missing or moved clone, a network failure or a
+git sign-in failure produces *Couldn't check* (press it to retry). *Not available* means no usable updater script.
 
 The updater runs the new version's `install.sh` without the options you installed with. If you used `--app-dir` or
-`--data-dir`, update by hand instead: with a custom `--app-dir` the update can't find the installed app and stops, and
-with a custom `--data-dir` the rebuilt app would use the default data folder. Updating by hand always works: `git pull`,
-then the same `install.sh` command again.
+`--data-dir`, update by hand with the same options: the updater searches the default app folder, so it may fail
+to find your app or use another installed copy, and it rebuilds with the default data folder. To retry by hand, run `git pull`,
+then the same `install.sh` command again, including `--nightly` for the Nightly app. Build errors still need to be resolved.
 
 ### The Steam edition
 
@@ -165,21 +169,21 @@ up in the launcher next time.
 
 | Setting | Choices |
 |---|---|
-| **Game** | Single Player, or Multiplayer: the game opens on its multiplayer screens (see [MULTIPLAYER.md](MULTIPLAYER.md)); the note shows this Mac's address for other players. **Benchmark**, when installed: Gas Powered Games' benchmark demo, run uncapped (see [BENCHMARK.md](BENCHMARK.md)). |
+| **Game** | Single Player, or Multiplayer: the game opens on its multiplayer screens (see [MULTIPLAYER.md](MULTIPLAYER.md)); the note shows this Mac's address for other players. **Legends of Aranna** and **Aranna Multiplayer** appear when the expansion is installed. **Benchmark**, when installed: Gas Powered Games' benchmark demo, run uncapped (see [BENCHMARK.md](BENCHMARK.md)). |
 | **Display: Resolution** | Your display's size (recommended), its full Retina size, or a standard size that fits. The game's front-end menus are always 800×600 by design and are shown with bars at the sides; the game world uses the chosen resolution. |
 | **Display: Interface Size** | 100% (as the game draws it) up to 300%: the game runs at the chosen resolution divided by this, so its interface (menus, panels, text) is that much larger, while the world is drawn at the full resolution. Only sizes that leave the game at least 800×600 are offered; with the full Retina resolution, 200% gives the original interface size at double sharpness. |
 | **Display: Notch** | On a Mac with a notch: **Hide the Notch** (the picture below the camera, a black band beside it) or **Around the Notch** (the picture on the whole display, the notch over a little of its top centre). The resolution's "This display" follows it. |
 | **Display: View Distance** | Original, Far (125%), Farther (150%, about what the SeeFar mod gives), Very Far (200%), Horizon (250%), Maximum (300%). Higher settings draw much more of the world; Horizon and Maximum can lower the frame rate in the largest outdoor areas. |
 | **Display: Gamma** | The game's gamma correction, 0.5 (darker) to 1.5 (brighter); 1.0 as shipped. |
-| **Display: Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120, 60, 30, or Unlimited (no cap, no vertical sync). |
+| **Display: Frame Rate** | Automatic (a steady 120 fps on ProMotion displays, 60 in the heaviest scenes), 120 (only on displays reporting at least 120 Hz), 60, 30, or Unlimited (no cap, no vertical sync). |
 | **Graphics: Texture Filtering** | Bilinear (as shipped) or Trilinear: smoother distant textures. |
 | **Graphics: Object Detail** | How much of the small scenery (plants, rocks, clutter) is drawn: Lowest, Low, Medium, High or Full (as shipped). |
 | **Graphics: Shadows** | Which characters cast shadows: Off, Simple (round shadows), Party Complex (true shadows for your party; as shipped) or All Complex. |
 | **Graphics: Shadow Detail** | The size of each character's shadow silhouette: Original (64 pixels, as shipped), 128, 256 (default), 512, 1024. Larger shadows are sharper, especially at high resolutions, and use a little more GPU memory and time. |
 | **Graphics: Shadow Edges** | Original (hard edges, as shipped), Soft (default) or Softer: a light filter that smooths the edges of character shadows. |
 
-The game runs in macOS full screen, so **Game Mode** comes on while you play (the CPU and GPU kept for the game,
-lower Bluetooth latency), whichever Notch setting is chosen.
+[Game Mode](https://support.apple.com/en-us/105118) requires macOS 14 or later and macOS full screen.
+**Hide the Notch** uses macOS full screen; **Around the Notch** uses a borderless window without Game Mode.
 
 Your choices are remembered: next time just press **Play** (or Return). Arrow keys move between and change settings,
 Return opens a group and closes it again; Escape closes it, or quits.

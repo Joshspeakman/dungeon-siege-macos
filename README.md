@@ -21,6 +21,8 @@ git clone https://github.com/Joshspeakman/dungeon-siege-macos.git && cd dungeon-
 open ~/Applications/"Dungeon Siege Native.app"
 ```
 
+Keep the clone in a path without spaces: the current compile scripts split source paths on whitespace.
+
 The step-by-step guide is **[docs/INSTALL.md](docs/INSTALL.md)**. The sections below summarise it.
 
 ## Requirements
@@ -30,8 +32,9 @@ The step-by-step guide is **[docs/INSTALL.md](docs/INSTALL.md)**. The sections b
   isn't needed.
 - On the first build the recompiler makes a Python environment in `recomp/.venv` and installs two helper packages into
   it with pip (`capstone` and `unicorn`), so the first install needs an internet connection.
-- About **2 GB** of free space for the build, plus room for the game if the installer copies or unpacks it (GOG
-  installer, Steam). The build takes a few minutes.
+- Build time and peak disk use have not been verified for a clean install. Allow room for your game files,
+  generated source and object files, the app, and additional update worktrees; time varies with the Mac. The GOG
+  installer, Steam and collection options also copy or unpack the game into the data folder.
 - Optional: [Homebrew](https://brew.sh) and `brew install innoextract`, only for installing from the GOG offline
   installer.
 - **Dungeon Siege 1.11.1 from GOG or Steam.** The installer compares the SHA-256 of `DungeonSiege.exe` with the two
@@ -78,7 +81,7 @@ Every `install.sh` option:
 | `--gog-installer FILE` | Unpack the GOG offline installer into `<data>/gog-extract` (with `innoextract`) and build from that. |
 | `--steam [DIR]` | The Steam edition: Steam's own download location, or `DIR`. Copied into `<data>/steam-game`. |
 | `--expansion DIR` | Add Legends of Aranna from your own copy: `Expansion.dsres`, `ExpVoices.dsres` and `Expansion.dsmap` (plus `XPRes.dsres` and `XPMap.dsmap` if present) are found anywhere under `DIR`. Only the data is used. |
-| `--mods DIR` | Add every Dungeon Siege mod archive (`.dsres`, `.dsmap`) found under `DIR` to the launcher's Mods list. |
+| `--mods DIR` | Add valid Dungeon Siege mod archives (`.dsres`, `.dsmap`) found under `DIR`, excluding the base game and expansion archives, to the launcher's Mods list. |
 | `--yesterhaven DIR-or-FILE` | Add Gas Powered Games' free Yesterhaven adventure from a folder holding its two files, or from its installer. |
 | `--benchmark FILE` | Add Gas Powered Games' Dungeon Siege Benchmark from its installer, `DSBenchmark.EXE` ([docs/BENCHMARK.md](docs/BENCHMARK.md)). |
 | `--collection DIR` | Set up everything from one backup folder: the game, the expansion, mods, saves and launcher settings. |
@@ -117,7 +120,7 @@ menu art. Choose and press **Play** (or Return); every choice is remembered.
   Multiplayer** appear once the expansion is installed, **Benchmark** once the benchmark is.
 - **Display:** Resolution (your display's size is recommended), Interface Size (100% to 300%: a larger interface while
   the world stays sharp), Notch (on a Mac with a notch: **Hide the Notch** or **Around the Notch**), View Distance
-  (Original up to Maximum, 300%), Gamma, and Frame Rate (Automatic, 120, 60, 30 or Unlimited).
+  (Original up to Maximum, 300%), Gamma, and Frame Rate (Automatic, 120 on displays reporting at least 120 Hz, 60, 30 or Unlimited).
 - **Graphics:** the game's own Options > Video settings (Texture Filtering, Object Detail, Shadows) plus Shadow Detail
   and Shadow Edges for sharper, softer character shadows. They're written into the game's settings when you press
   Play, so the in-game Video page needn't be used.
@@ -138,18 +141,20 @@ not supported.
 **From the app:** the launch window's **Updates** row asks GitHub for the newest commit of the app's branch: `main` for
 *Dungeon Siege*, `nightly` for *Dungeon Siege Nightly*. When it says **Update available**, press it. The new version
 is checked out into `build/stable` (or `build/nightly`) inside your clone, the app is rebuilt from your copy of the
-game (a few minutes, with a progress window), and it restarts. Your own checkout, game folder, saves, settings and mods
+game (with a progress window), and offers a Restart button when it finishes.
+Your own checkout, game folder, saves, settings and mods
 are left as they are. The output goes to `update.log` in the data folder.
 
-This needs the clone the app was installed from, still in the same place: if it has been moved or deleted, the row
-says *Not available*. *Couldn't check* means GitHub wasn't reachable; press it to retry.
+Keep the clone in the same place. *Not available* means the app has no usable updater script; *Couldn't check*
+means the script failed to read the remote branch, for example because the clone moved, GitHub was unreachable or
+git needed a sign-in. Press the row to retry.
 
 **Known limitation:** the updater runs the new `install.sh` without the options you first installed with. If you used
-`--app-dir` or `--data-dir`, update by hand instead: with a custom `--app-dir` the update can't find the installed app
-and stops, and with a custom `--data-dir` the rebuilt app would use the default data folder.
+`--app-dir` or `--data-dir`, update by hand with the same options. The updater searches the default app folder,
+so it may fail to find your app or use another installed copy, and it rebuilds with the default data folder.
 
 **By hand:** `git pull`, then run the same `install.sh` command again (with the same `--app-dir`/`--data-dir`, if
-any).
+any, and `--nightly` for the Nightly app).
 
 **Stable and Nightly.** New work lands on the `nightly` branch first and reaches `main` once it has proven itself.
 `./install.sh --nightly` builds the newest `nightly` in `build/nightly` (your checkout stays as it is) and installs
@@ -166,8 +171,8 @@ Delete `~/Applications/Dungeon Siege Native.app` (and `Dungeon Siege Nightly.app
 - **Native performance.** The game's own code runs as optimised arm64 with no translation layer. The frame rate follows
   your display (60 Hz, or 120 Hz on ProMotion screens), with Unlimited for faster hardware, and frame pacing stays
   steady. The heaviest calculation in big battles (vertex lighting) runs as native code with identical results.
-- **Game Mode.** The game runs in real macOS full screen and is recognised as a game, so Game Mode comes on while you
-  play. On a Mac with a notch, Around the Notch uses the whole display (a borderless window).
+- **Game Mode.** [Game Mode](https://support.apple.com/en-us/105118) requires macOS 14 or later and macOS full screen.
+  Around the Notch uses a borderless window and does not enable Game Mode.
 - **Scales with your Mac.** View distance up to 300% of the original (the built-in equivalent of the SeeFar mod),
   Interface Size for high resolutions, and defaults chosen from your Mac's GPU (Very Far on Max and Ultra chips,
   Farther elsewhere). A new installation starts with all complex shadows and trilinear filtering.
@@ -244,7 +249,7 @@ Open issues: [github.com/Joshspeakman/dungeon-siege-macos/issues](https://github
 - **Skip the launch window** (play with the saved settings):
   `DS_NO_LAUNCHER=1 "$HOME/Applications/Dungeon Siege Native.app/Contents/MacOS/launcher"`.
 - **An update fails:** read `update.log` in the data folder; updating by hand (`git pull` and the same `install.sh`
-  command) always works.
+  command) lets you retry with the original options; it can still fail if the build fails.
 
 ## How it works
 
