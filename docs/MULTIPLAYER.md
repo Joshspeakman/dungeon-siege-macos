@@ -73,8 +73,10 @@ download), add them with:
 ./install.sh --yesterhaven "/path/to/folder/with/the/files"
 ```
 
-They are copied into the app's data folder (`~/Games/DungeonSiegeNative/game`), which the game sees as part of its own
-`Maps` and `Resources` folders; your game folder is not changed. The host picks **Yesterhaven** under **Map Settings**
+They are copied into the Mods folder (`~/Games/DungeonSiegeNative/mods`) and start ticked in the launcher's Mods
+list; the game then sees them as part of its own `Maps` and `Resources` folders, and your game folder is not changed.
+Without `--yesterhaven`, an install downloads Gas Powered Games' own Yesterhaven installer from the Internet Archive
+and takes the two files out of it (`--no-downloads` skips this). The host picks **Yesterhaven** under **Map Settings**
 in the staging area. Every player needs the files, Windows players in their game's `Maps` and `Resources` folders.
 
 ## Security
