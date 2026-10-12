@@ -281,6 +281,12 @@ IMPL(user32, GetDlgCtrlID) { Win *w = W(ARG(0)); RET(w ? w->id : 0, 1); }
 typedef struct Msg { uint32_t hwnd, msg, wp, lp, time, x, y; } Msg;
 typedef struct Queue { uint32_t tid; Msg q[512]; int head, n; int quit; uint32_t quit_code; } Queue;
 static Queue queues[MAX_THREADS]; static pthread_mutex_t qlock = PTHREAD_MUTEX_INITIALIZER;
+void w32_thread_queue_closed(uint32_t tid)
+{
+    pthread_mutex_lock(&qlock);
+    for (int k = 0; k < MAX_THREADS; k++) if (queues[k].tid == tid) memset(&queues[k], 0, sizeof queues[k]);
+    pthread_mutex_unlock(&qlock);
+}
 static Queue *Q(uint32_t tid)
 {
     for (int k = 0; k < MAX_THREADS; k++) if (queues[k].tid == tid) return &queues[k];
@@ -307,7 +313,11 @@ static int peek(Ctx *c, uint32_t out, uint32_t hwnd, uint32_t lo, uint32_t hi, i
         if (hwnd && m->hwnd != hwnd) continue;
         if ((lo || hi) && (m->msg < lo || m->msg > hi)) continue;
         memcpy(GP(out), m, sizeof *m);
-        if (remove) { for (int j = k; j < q->n - 1; j++) q->q[(q->head + j) % 512] = q->q[(q->head + j + 1) % 512]; q->n--; }
+        if (remove) {
+            if (!k) q->head = (q->head + 1) % 512;
+            else for (int j = k; j < q->n - 1; j++) q->q[(q->head + j) % 512] = q->q[(q->head + j + 1) % 512];
+            q->n--;
+        }
         pthread_mutex_unlock(&qlock); return 1;
     }
     if (q->quit) {
