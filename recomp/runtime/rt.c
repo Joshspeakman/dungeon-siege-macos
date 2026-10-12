@@ -37,8 +37,44 @@ static void fault(Ctx *c, uint32_t pc, const char *what)
 void rt_unhandled(Ctx *c, uint32_t pc, const char *what) { fault(c, pc, what); __builtin_unreachable(); }
 void rt_div_fault(Ctx *c, uint32_t pc) { fault(c, pc, "integer divide fault"); __builtin_unreachable(); }
 
+
+#ifndef DS2_BROKEN_WORLD
+static struct rt_fn *native_functions;
+static size_t native_mask;
+static uint32_t native_hash(uint32_t x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15;
+    x *= 0x846ca68bu; return x ^ (x >> 16);
+}
+__attribute__((constructor)) static void native_prepare_functions(void) {
+    const char *mode=getenv("RT_DISPATCH_CACHE");
+    if (mode && !strcmp(mode,"0")) return;
+    size_t n=1, count=rt_fntab_n;
+    if (count > SIZE_MAX/2) return;
+    while (n < count*2) { if (n > SIZE_MAX/2) return; n*=2; }
+    if (n > SIZE_MAX/sizeof *native_functions) return;
+    struct rt_fn *table=calloc(n,sizeof *table);
+    if (!table) return; /* allocation failure retains the sorted-table lookup */
+    for (unsigned i=0;i<rt_fntab_n;i++) {
+        size_t k=native_hash(rt_fntab[i].addr)&(n-1);
+        while (table[k].fn) k=(k+1)&(n-1);
+        table[k]=rt_fntab[i];
+    }
+    native_mask=n-1; native_functions=table;
+}
+#endif
+
 GuestFn rt_lookup(uint32_t addr)
 {
+#ifndef DS2_BROKEN_WORLD
+    if (native_functions) {
+        size_t k=native_hash(addr)&native_mask;
+        while (native_functions[k].fn) {
+            if (native_functions[k].addr==addr) return native_functions[k].fn;
+            k=(k+1)&native_mask;
+        }
+        return NULL;
+    }
+#endif
     unsigned lo = 0, hi = rt_fntab_n;
     while (lo < hi) {
         unsigned mid = (lo + hi) / 2;
