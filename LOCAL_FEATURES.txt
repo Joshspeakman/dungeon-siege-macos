@@ -1,5 +1,4 @@
-LOCAL REVIEW BUILD - 2026-10-12
-Not published to nightly.
+NIGHTLY FEATURE UPDATE - 2026-10-12
 
 Dungeon Siege: native environmental audio
 
