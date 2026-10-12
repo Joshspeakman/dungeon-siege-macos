@@ -837,6 +837,11 @@ static BOOL update_run(NSWindow *parent, NSString *updater, NSString *branch, NS
     return ok;
 }
 
+static NSArray *eax_choices(void) {
+    return @[@{@"value": @"false", @"label": @"Standard", @"note": @"Original sound without environmental effects"},
+             @{@"value": @"true", @"label": @"EAX", @"note": @"Positional sound with room reflections and reverb"}];
+}
+
 /* Shows the launch window (modal) unless DS_NO_LAUNCHER is set; returns 0 to quit. DS_LAUNCHER_SHOT=<png> renders it
  * to an image instead (development). */
 int ds_launcher_run(const char *game_dir, const char *data_dir)
@@ -856,23 +861,24 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     /* the game's own graphics options, from the chosen game's prefs.gas (Legends of Aranna keeps its own) */
     DSRow *gsh = [DSRow new], *flt = [DSRow new], *det = [DSRow new], *gam = [DSRow new];
     gsh.title = @"Shadows"; flt.title = @"Texture Filtering"; det.title = @"Object Detail"; gam.title = @"Gamma";
-    NSArray *prefRows = @[gsh, flt, det, gam], *prefKeys = @[@"video_shadows", @"texture_filtering", @"object_detail_level", @"video_gamma"];
-    NSArray *(^prefChoices)(NSInteger) = ^NSArray *(NSInteger k) { return k == 0 ? game_shadow_choices() : k == 1 ? filtering_choices() : k == 2 ? detail_choices() : gamma_choices(); };
-    NSArray<NSNumber *> *prefDefault = @[@2, @0, @4, @5];           /* as the game shipped (config/options.gas) */
+    DSRow *eaxRow = [DSRow new]; eaxRow.title = @"Environmental Audio";
+    NSArray *prefRows = @[gsh, flt, det, gam, eaxRow], *prefKeys = @[@"video_shadows", @"texture_filtering", @"object_detail_level", @"video_gamma", @"eax_enabled"];
+    NSArray *(^prefChoices)(NSInteger) = ^NSArray *(NSInteger k) { return k == 0 ? game_shadow_choices() : k == 1 ? filtering_choices() : k == 2 ? detail_choices() : k == 3 ? gamma_choices() : eax_choices(); };
+    NSArray<NSNumber *> *prefDefault = @[@2, @0, @4, @5, @0];           /* as the game shipped (config/options.gas) */
     NSMutableDictionary<NSNumber *, NSMutableDictionary *> *prefRead = [NSMutableDictionary dictionary], *prefNow = [NSMutableDictionary dictionary];
     void (^prefsLoad)(BOOL) = ^(BOOL loa) {
         if (!prefRead[@(loa)]) {
             NSMutableDictionary *r = [NSMutableDictionary dictionary]; NSString *pp = prefs_path(data, loa);
-            for (NSInteger k = 0; k < 4; k++) { NSString *v = prefs_get(pp, prefKeys[k]); if (v) r[prefKeys[k]] = v; }
+            for (NSInteger k = 0; k < (NSInteger)prefRows.count; k++) { NSString *v = prefs_get(pp, prefKeys[k]); if (v) r[prefKeys[k]] = v; }
             prefRead[@(loa)] = r; prefNow[@(loa)] = [r mutableCopy];
         }
-        for (NSInteger k = 0; k < 4; k++) {
+        for (NSInteger k = 0; k < (NSInteger)prefRows.count; k++) {
             DSRow *row = prefRows[k]; row.choices = prefChoices(k);
             row.index = pref_index(row, prefNow[@(loa)][prefKeys[k]], prefDefault[k].integerValue);
         }
     };
     void (^prefsKeep)(BOOL) = ^(BOOL loa) {                         /* the rows' values, kept for that game */
-        for (NSInteger k = 0; k < 4; k++) { DSRow *row = prefRows[k]; prefNow[@(loa)][prefKeys[k]] = row.choices[row.index][@"value"]; }
+        for (NSInteger k = 0; k < (NSInteger)prefRows.count; k++) { DSRow *row = prefRows[k]; prefNow[@(loa)][prefKeys[k]] = row.choices[row.index][@"value"]; }
     };
     void (^prefsSave)(void) = ^{                                    /* only what was changed; a new player's file is left to the game */
         for (NSNumber *loa in prefNow) {
@@ -911,13 +917,15 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     upd.choices = update_choice(ustate, branch, built, nil);
     BOOL shotMode = shot != NULL;
     shd.title = @"Shadow Detail"; she.title = @"Shadow Edges";
+    DSSection *audio = [DSSection new]; audio.title = @"Audio"; audio.rows = @[eaxRow];
+    audio.summary = ^NSString * { return eaxRow.choices[eaxRow.index][@"label"]; };
     DSSection *display = [DSSection new], *graphics = [DSSection new], *modsSec = [DSSection new], *updSec = [DSSection new];
     display.title = @"Display"; display.rows = notch_height() > 0 ? @[res, ui, notch, fps, dist, gam] : @[res, ui, fps, dist, gam];
     graphics.title = @"Graphics"; graphics.rows = @[flt, det, gsh, shd, she];
     modsSec.title = @"Mods"; modsSec.summary = ^NSString * { return mods.choices[mods.index][@"label"]; };
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 760)];
-    v.top = @[mode]; v.sections = @[display, graphics, modsSec, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
+    v.top = @[mode]; v.sections = @[display, graphics, audio, modsSec, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
     void (^check)(void) = ^{
         if (!updater) return;

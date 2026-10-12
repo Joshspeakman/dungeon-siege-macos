@@ -87,7 +87,7 @@ IMPL(kernel32, LoadLibraryExA)
     if (k < 0) { fprintf(stderr, "w32: LoadLibraryExA(%s) -> not available\n", GS(ARG(0))); w32_set_last_error(c, 126); RET(0, 3); }
     RET(MODULE_BASE + 0x100000u * (uint32_t)k, 3);
 }
-IMPL(kernel32, FreeLibrary) { RET(1, 1); }
+IMPL(kernel32, FreeLibrary) { int w32_free_library(Ctx *, uint32_t); int ok=w32_free_library(c,ARG(0)); RET(ok,1); }
 IMPL(kernel32, GetProcAddress)
 {
     uint32_t h = ARG(0), n = ARG(1); char ord[16]; const char *name = ord;

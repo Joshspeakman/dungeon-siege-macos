@@ -124,6 +124,7 @@ menu art. Choose and press **Play** (or Return); every choice is remembered.
 - **Graphics:** the game's own Options > Video settings (Texture Filtering, Object Detail, Shadows) plus Shadow Detail
   and Shadow Edges for sharper, softer character shadows. They're written into the game's settings when you press
   Play, so the in-game Video page needn't be used.
+- **Audio:** Environmental Audio → Standard or EAX. EAX uses the game's environmental settings for native Core Audio reverb and positional effects.
 - **Mods:** a tick list per game, and an *Open Mods Folder* button ([docs/MODS.md](docs/MODS.md)).
 - **Updates:** see below.
 
@@ -135,6 +136,8 @@ network, and the firewall (if it is on) whether it may accept incoming connectio
 In the game the mouse or trackpad controls the cursor, a two-finger click is a right click, and two-finger scrolling
 zooms. The game's keyboard shortcuts work as on Windows; **Cmd+Tab** switches away and **Cmd+Q** quits. Controllers are
 not supported.
+
+EAX is implemented in software on the Mac: the original Miles provider feeds DirectSound3D and EAX 1.0/2.0 properties into the native mixer. Room decay, early reflections, high-frequency damping, source positioning, distance, cones, Doppler, obstruction and occlusion are processed before Core Audio output. The game controls which sounds enter the room effect, so dry areas and sounds remain dry. This reproduces the environmental behavior, not the exact sound of a particular Creative card. The setting is shared with the game's `eax_enabled` preference.
 
 ## Updating
 
