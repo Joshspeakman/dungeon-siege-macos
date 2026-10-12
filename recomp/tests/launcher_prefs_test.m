@@ -43,6 +43,10 @@ int main(void)
         NSInteger k = pref_index(r, @"0.650000", 5);
         CHECK(k == 11 && [r.choices[k][@"value"] isEqualToString:@"0.650000"] && [r.choices[k][@"label"] isEqualToString:@"Custom (0.65)"]);
         r.choices = game_shadow_choices(); CHECK(pref_index(r, @"complex_party", 0) == 2 && pref_index(r, @"none", 3) == 0);
+        r.choices = eax_choices();
+        CHECK(pref_index(r, @"false", 0) == 0 && pref_index(r, @"true", 0) == 1);
+        prefs_set(p, @{@"eax_enabled": @"true"}); CHECK([prefs_get(p, @"eax_enabled") isEqualToString:@"true"]);
+        prefs_set(p, @{@"eax_enabled": @"false"}); CHECK([prefs_get(p, @"eax_enabled") isEqualToString:@"false"]);
         [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
         printf(fails ? "launcher_prefs_test: %d failed\n" : "launcher_prefs_test: all passed\n", fails);
     }

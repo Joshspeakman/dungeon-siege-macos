@@ -22,6 +22,8 @@ static char *thunk_name[MAX_THUNKS]; static ImpFn thunk_fn[MAX_THUNKS]; static u
 static uint32_t thunk_target[MAX_THUNKS];      /* import served by a recompiled DLL: its export's guest address */
 struct rt_image { const char *name; uint32_t base, imp_first, imp_count; };
 extern const struct rt_image rt_images[]; extern const unsigned rt_images_n;
+static uint32_t image_dynamic_refs[64], image_size[64];
+static uint8_t image_pinned[64], image_reserved[64];
 static uint8_t image_loaded[64], image_inited[64], image_ref[64];   /* mapped / DllMain done / loaded by the game */
 static pthread_mutex_t thunk_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -74,10 +76,22 @@ void w32_crash_record_call(uint32_t index);
 void rt_import(Ctx *c, uint32_t index)
 {
     w32_crash_record_call(index);
-    if (index < MAX_THUNKS && thunk_target[index]) { rt_call(c, thunk_target[index]); return; }
+    if (index < MAX_THUNKS && thunk_target[index]) {
+        const char *name = thunk_name[index];
+        static int audio_trace=-1; if(audio_trace<0)audio_trace=getenv("W32_EAXLOG")!=NULL;
+        int trace = audio_trace && name && (strstr(name, "enumerate_3D_providers") || strstr(name, "open_3D_provider"));
+        uint32_t args[3]; if (trace) for (int i=0;i<3;i++) args[i]=rt_r32(G_MEM,c->esp+4+4*i);
+        rt_call(c, thunk_target[index]);
+        if (trace) {
+            fprintf(stderr,"miles: %s -> %u",name,c->eax);
+            if (strstr(name,"enumerate") && c->eax) fprintf(stderr," (%s)",GS(rt_r32(G_MEM,args[2])));
+            fputc('\n',stderr);
+        }
+        return;
+    }
     w32_trace_import(c, index);
     if (!text_trace_init) { text_trace_init = 1; const char *p = getenv("W32_TRACE"); if (p && (text_trace = fopen(p, "w"))) setvbuf(text_trace, 0, _IOLBF, 0); }   /* lines survive an abrupt exit */
-    if (text_trace && index < nthunks && thunk_fn[index]) {
+    if (text_trace && index < nthunks && thunk_fn[index] && (!getenv("W32_TRACE_FILTER") || strstr(thunk_name[index],getenv("W32_TRACE_FILTER")))) {
         uint32_t a[5]; for (int k = 0; k < 5; k++) a[k] = rt_r32(G_MEM, c->esp + 4 + 4 * k);
         uint32_t ret = rt_r32(G_MEM, c->esp), tid = rt_r32(G_MEM, c->fs_base + 0x24);
         thunk_fn[index](c);
@@ -302,7 +316,7 @@ static void bind_imports(int k)
             const char *m = getenv("W32_MILES"); if (m && !strcmp(m, "native")) t = -1;
         }
         if (t > 0 && load_image(t) == 0) {
-            image_ref[t] = 1;
+            image_ref[t] = 1; image_pinned[t] = 1;
             uint32_t a = bang[1] == '#' ? w32_export(rt_images[t].base, 0, (uint32_t)atoi(bang + 2)) : w32_export(rt_images[t].base, bang + 1, 0);
             if (a) thunk_target[j] = a; else fprintf(stderr, "w32: %s not exported by %s\n", bang + 1, rt_images[t].name);
         }
@@ -321,7 +335,9 @@ static int load_image(int k)
     uint32_t pe = *(uint32_t *)(d + 0x3c), opt = pe + 24, size = *(uint32_t *)(d + opt + 56);
     uint16_t nsec = *(uint16_t *)(d + pe + 6), optsz = *(uint16_t *)(d + pe + 20);
     if (*(uint32_t *)(d + opt + 28) != im->base) { fprintf(stderr, "w32: %s: unexpected base\n", im->name); free(d); return -1; }
-    vm_register(im->base, (size + 0xffff) & ~0xffffu, 0x1000000);
+    if (!image_reserved[k]) { vm_register(im->base, (size + 0xffff) & ~0xffffu, 0x1000000); image_reserved[k]=1; }
+    image_size[k] = size;
+    memset(G_MEM + im->base, 0, size); /* fresh .data/.bss on a provider reload */
     memcpy(G_MEM + im->base, d, *(uint32_t *)(d + opt + 60));
     for (int s = 0; s < nsec; s++) {
         uint8_t *h = d + opt + optsz + 40 * s;
@@ -341,7 +357,7 @@ static void init_image(Ctx *c, int k)
     image_inited[k] = 1;
     const struct rt_image *im = &rt_images[k];
     for (uint32_t j = im->imp_first; j < im->imp_first + im->imp_count; j++) if (thunk_target[j]) {
-        for (unsigned t = 1; t < rt_images_n; t++) if (thunk_target[j] >= rt_images[t].base && thunk_target[j] < rt_images[t].base + 0x01000000u) init_image(c, (int)t);
+        for (unsigned t = 1; t < rt_images_n; t++) if (image_loaded[t] && thunk_target[j] >= rt_images[t].base && thunk_target[j] - rt_images[t].base < image_size[t]) init_image(c, (int)t);
     }
     uint32_t pe = im->base + rt_r32(G_MEM, im->base + 0x3c), ep = rt_r32(G_MEM, pe + 24 + 16);
     if (ep) { uint32_t a[3] = {im->base, 1, 0}; uint32_t r = w32_callback(c, im->base + ep, 3, a); if (!r) fprintf(stderr, "w32: %s DllMain failed\n", im->name); }
@@ -360,8 +376,25 @@ uint32_t w32_load_library(Ctx *c, const char *name)
 {
     int k = image_index(name);
     if (k < 0 || load_image(k)) return 0;
-    image_ref[k] = 1; init_image(c, k);
+    image_dynamic_refs[k]++; image_ref[k] = 1; init_image(c, k);
     return rt_images[k].base;
 }
 uint32_t w32_image_module(const char *name) { int k = image_index(name); return k > 0 && image_ref[k] ? rt_images[k].base : 0; }
 const char *w32_image_name(uint32_t base) { for (unsigned k = 1; k < rt_images_n; k++) if (rt_images[k].base == base && image_ref[k]) return rt_images[k].name; return 0; }
+
+/* Miles shuts down and reopens its providers when EAX changes. A no-op
+ * FreeLibrary leaves their registration guard set after RIB unregisters them. */
+int w32_free_library(Ctx *c, uint32_t base)
+{
+    for(unsigned k=1;k<rt_images_n;k++) if(rt_images[k].base==base) {
+        if(!image_dynamic_refs[k])return image_pinned[k]!=0;
+        if(--image_dynamic_refs[k] || image_pinned[k])return 1;
+        if(image_inited[k]) {
+            uint32_t pe=base+rt_r32(G_MEM,base+0x3c),entry=rt_r32(G_MEM,pe+24+16);
+            if(entry){uint32_t a[3]={base,0,0};w32_callback(c,base+entry,3,a);}
+        }
+        image_inited[k]=image_loaded[k]=image_ref[k]=0;
+        return 1;
+    }
+    return 1; /* runtime-owned system modules remain resident */
+}

@@ -10,3 +10,6 @@ build/
 recomp/.venv/
 recomp/work/
 recomp/out/
+
+# Local Python tools
+/recomp/.venv

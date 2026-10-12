@@ -1,0 +1,12 @@
+LOCAL REVIEW BUILD - 2026-10-12
+Not published to nightly.
+
+Dungeon Siege: native environmental audio
+
+Choose Audio -> Environmental Audio -> EAX. Standard remains available; existing preferences and saves are preserved. The original Miles EAX provider is recompiled from your own game files and routes its DirectSound3D/EAX properties through native software mixing and Core Audio.
+
+Includes spatial position, distance, cones and Doppler; EAX 1.0/2.0 properties, early reflections, room decay, HF damping, obstruction and occlusion. The game controls the room send; its dry sounds stay dry. This approximates the behavior of EAX in software, not a specific Creative card's exact output. EAX 3+ is not advertised.
+
+Provider unload/reload restores fresh DLL state. The lifter now supports provider LOCK XADD and 16-bit IMUL instructions.
+
+Validation: gameplay with the original EAX provider, EAX/3D property and wet/dry routing fixtures, measured impulse responses, instruction-lowering checks, launcher preference round trips and runtime regressions. ASan/UBSan checks passed.

@@ -20,6 +20,7 @@ def check(repo):
             ('path_race',['files']), ('iface_lifecycle',['heap','vm']), ('dp8_large',['dp8proto']),
             ('message_queue',[]), ('pixel_conversion',[]), ('audio_mix',[]),
             ('vulkan_lifecycle',['vulkan_gen','heap','vm']), ('vulkan_lookup',['vulkan_gen','heap','vm'])]
+        cases.extend([('eax_mixer', []), ('eax_reverb', [])])
         fixture=temp/'dispatch_fixture.c'
         fixture.write_text('#include "rt.h"\nstatic void fn(Ctx *c){(void)c;}\nconst struct rt_fn {uint32_t addr;GuestFn fn;} rt_fntab[]={\n'+
             ''.join('{0x%x,fn},\n'%(0x400000+i*20 if i<32768 else 0x10000000+i*36) for i in range(65536))+
@@ -31,7 +32,7 @@ def check(repo):
             test = tests / (base+'_test.c')
             if not test.exists() or (len(sys.argv)>1 and case not in sys.argv[1:]): continue
             extra=[]
-            if case=='audio_mix' and (runtime/'win32/eax_reverb.c').exists(): extra.append(str(runtime/'win32/eax_reverb.c'))
+            if case in ('audio_mix','eax_mixer','eax_reverb') and (runtime/'win32/eax_reverb.c').exists(): extra.append(str(runtime/'win32/eax_reverb.c'))
             if case=='dispatch_perf': extra += [str(runtime/'rt.c'), str(fixture)]
             if case.startswith('df_frame'): extra += ['-DDF_EDITION','-DDF'+case[-1]+'_EDITION']
             exe=temp/case

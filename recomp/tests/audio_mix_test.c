@@ -28,7 +28,7 @@ int main(void) {
    float r=reference_sample(b,p0,1)*(1-t)+reference_sample(b,p1,1)*t;
    expected[2*i]=(float)(l*b->gain_l);expected[2*i+1]=(float)(r*b->gain_r);
    fr+=step;while(fr>=1){fr-=1;pos++;}
-   if(pos>=sizes[size]){if(loop)pos-=sizes[size];else{playing=0;pos=0;break;}}
+   if(pos>=sizes[size]){if(loop)pos%=sizes[size];else{playing=0;pos=0;break;}}
   }
   test_render(actual,513);assert(!memcmp(expected,actual,sizeof actual));
   assert(b->play==pos*b->align && b->frac==fr && b->playing==playing);

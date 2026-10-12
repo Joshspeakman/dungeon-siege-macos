@@ -17,7 +17,7 @@ recomp/build.sh "/path/to/Dungeon Siege/DungeonSiege.exe"     # -> recomp/work/f
 | Verification against the original code | every instruction form + four complete routines, see below |
 | Win32 platform layer (`runtime/win32`): loader, memory, heaps, threads, SEH, files, registry, USER32 window manager, GDI on Core Text, DbgHelp demangler | working |
 | DirectDraw/Direct3D 7 (`runtime/win32/ddraw.c`) + Metal renderer (`../src/renderer`) + macOS host (`host/main.m`) | working |
-| Miles Sound System: the game's own `Mss32.dll` 6.1c and the providers it loads (`system/mss/Mssfast.m3d`, `Mp3dec.asi`), recompiled from the user's game folder like the executable, on DirectSound/WINMM implemented over Core Audio (`runtime/win32/dsound.c`, `winmm.c`) | working; output verified against an independent decode (below) |
+| Miles Sound System: the game's own `Mss32.dll` 6.1c and the providers it loads (`system/mss/Mssfast.m3d`, `Msseax.m3d`, `Msseax2.m3d`, `Mp3dec.asi`), recompiled from the user's game folder like the executable, on DirectSound/WINMM implemented over Core Audio (`runtime/win32/dsound.c`, `winmm.c`) | working; output verified against an independent decode (below) |
 | Hand-written Miles replacement (`runtime/win32/miles.c`), kept as a fallback: `W32_MILES=native` | working |
 | Bink video | the game's own BinkW32.dll, recompiled like Miles (movies are inside Objects.dsres; the expansion's in Expansion.dsres); its sound goes through Miles; frames copied to the primary surface are presented |
 | Structured exception handling incl. `__except` blocks (landing pads in the 39 functions that use them) | working |
@@ -72,12 +72,12 @@ one), `W32_DSOUND=0` (no DirectSound: Miles falls back to waveOut, ~250 ms laten
 
 ### Recompiled DLLs
 
-`build.sh` also recompiles `Mss32.dll`, `Mssfast.m3d` and `Mp3dec.asi` from the game folder (each DLL's analysis
+`build.sh` also recompiles `Mss32.dll`, `Mssfast.m3d`, `Msseax.m3d`, `Msseax2.m3d` and `Mp3dec.asi` from the game folder (each DLL's analysis
 covers all its code sections; `MSSMIXER` holds Miles' hand-written mixers). Each image keeps its preferred base;
 the loader maps them at start, binds imports between images to the exporting image's code, runs `DllMain`, and serves
 `LoadLibrary`/`GetProcAddress`/`GetModuleHandle` for them. Instructions a DLL guards with a CPU check (Mp3dec's
 3DNow!/MMX paths) raise `STATUS_ILLEGAL_INSTRUCTION`; `cpuid` reports a Pentium without MMX, so the plain x86/x87
-paths run. The EAX providers (`Msseax*.m3d`) need hardware DirectSound3D and are left out; Miles skips them.
+paths run. The EAX providers are recompiled too. Native DirectSound3D and EAX property interfaces supply their capabilities, with environmental audio rendered by `eax_reverb.c` through Core Audio.
 
 Check (menu music, `s_m_frontend.mp3`): the recorded output against Apple's own decode of the same file, with
 `tests/audiocheck.c` — correlation 1.00000 at every point tested, constant offset (no drift: rate and pitch exact),
@@ -171,3 +171,9 @@ games.
 
 The aim is straightforward native builds without unwanted extras or a stack of translation layers. Forks and
 improvements are welcome.
+
+## Environmental audio checks
+
+`python3 recomp/tests/runtime_regressions_macos.py eax_mixer eax_reverb` runs the guest property/3D ABI and measured room-response checks under ASan/UBSan. `recomp/.venv/bin/python recomp/tests/locked_xadd_test.py` checks the provider's atomic XADD and 16-bit IMUL instruction lowering. `launcher_prefs_test.m` includes EAX preference round trips.
+
+`W32_EAXLOG=1` reports the selected Miles provider and dry/room activity; `W32_DSLOG=1` includes EAX property writes. A zero room send can be the game's explicit dry mix, not a failed provider. EAX 1.0/2.0 are supported; EAX 3+ extensions are not advertised. Provider unload/reload calls DllMain and restores fresh data so switching audio providers does not leave a stale registration.
