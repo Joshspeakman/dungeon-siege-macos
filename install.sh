@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh --game-dir <GOG "Dungeon Siege" folder> [--app-dir DIR] [--data-dir DIR]
+# install.sh --game-dir <GOG "Dungeon Siege" folder> [--app-dir DIR] [--data-dir DIR] [--in-place]
 # install.sh --gog-installer <setup_dungeon_siege_*.exe>      (GOG offline installer; needs: brew install innoextract)
 # install.sh --steam [folder]          the Steam edition (app 39190), downloaded on the Mac through Steam's console
 #                                      (steam://open/console, then: download_depot 39190 39191); without a folder,
@@ -44,7 +44,9 @@ GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; BENCH=""; NODL="${DS_NO_DOWNLOADS:-
 NIGHTLY=""; AS_NIGHTLY=""; STEAM=""; ARGS=()
 STEAM_SHA=c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab
 STEAM_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_39190/depot_39191"
+IN_PLACE=""
 while [ $# -gt 0 ]; do
+  case "$1" in --in-place) IN_PLACE=1; ARGS+=("$1"); shift; continue;; esac
   case "$1" in --nightly) NIGHTLY=1; shift; continue;; --as-nightly) AS_NIGHTLY=1; shift; continue;; esac
   ARGS+=("$1"); [ $# -gt 1 ] && case "$1" in --*) case "$2" in --*) ;; *) ARGS+=("$2");; esac;; esac
   if [ "$1" = --steam ]; then if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then STEAM="$2"; shift 2; else STEAM="$STEAM_DEPOT"; shift; fi; continue; fi
@@ -241,6 +243,17 @@ A="$APPS/$APP_NAME.app"; echo "== installing $A"
 mkdir -p "$APPS"; rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 cp "$HERE/recomp/work/full/app/DungeonSiegeNative" "$HERE/recomp/work/full/app/shaders.metal" "$HERE/recomp/work/full/app/dsr_snapshot.bin" "$A/Contents/MacOS/"
 cp "$HERE/recomp/work/DungeonSiege.exe" "$A/Contents/Resources/DungeonSiege.exe"
+# The game is copied into the data folder (game-files) and the app reads it from there, so the folder it was installed
+# from is no longer needed and can be deleted. On a Mac the copy is an APFS clone: it takes no extra space. Updates and
+# reinstalls keep using the copy. --in-place reads the given folder instead (nothing is copied).
+if [ -z "$IN_PLACE" ]; then case "$GAME/" in "$DATA"/*) ;; *)
+  GF="$DATA/game-files"; echo "== copying the game from $GAME into $GF"
+  mkdir -p "$DATA"; rm -rf "$GF.part"
+  if [ "$(uname -s)" = Darwin ]; then cp -cRL "$GAME" "$GF.part" 2>/dev/null || { rm -rf "$GF.part"; cp -RL "$GAME" "$GF.part"; }
+  else cp -RL --reflink=auto "$GAME" "$GF.part"; fi
+  rm -rf "$GF"; mv "$GF.part" "$GF"
+  echo "== the app reads the game from $GF: $GAME is no longer needed (delete it to free the space)"; GAME="$GF";;
+esac; fi
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")      # shell-quoted: any folder name is only data
 # updates from the launcher: the branch this app follows (main, or nightly for Nightly), the commit it was built from and
 # the checkout it was installed from; its updater fetches the branch into a worktree there and rebuilds the app from it
