@@ -175,7 +175,7 @@ Delete `~/Applications/Dungeon Siege Native.app` (and `Dungeon Siege Nightly.app
   Around the Notch uses a borderless window and does not enable Game Mode.
 - **Scales with your Mac.** View distance up to 300% of the original (the built-in equivalent of the SeeFar mod),
   Interface Size for high resolutions, and defaults chosen from your Mac's GPU (Very Far on Max and Ultra chips,
-  Farther elsewhere). A new installation starts with all complex shadows and trilinear filtering.
+  Farther elsewhere). A new installation starts with the game's shipped settings (Party complex shadows, bilinear filtering); the launcher's Graphics rows change them.
 - **Sharper, softer character shadows:** Shadow Detail (up to 1024 pixels, 256 by default; the original is 64) and
   Shadow Edges (Soft by default).
 - **Multiplayer and cross-play** on LAN and over the internet, using the game's own DirectPlay 8 protocol
