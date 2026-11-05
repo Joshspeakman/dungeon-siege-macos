@@ -119,7 +119,7 @@ static uint32_t obj_ids, free_sid[65536], nfree_sid;      /* the renderer's surf
 static pthread_mutex_t sid_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t next_object_id(void)
 {
-    pthread_mutex_lock(&sid_lock); uint32_t id = obj_ids < 65535 ? ++obj_ids : nfree_sid ? free_sid[--nfree_sid] : 0; pthread_mutex_unlock(&sid_lock);
+    pthread_mutex_lock(&sid_lock); uint32_t id = obj_ids < 65533 ? ++obj_ids : nfree_sid ? free_sid[--nfree_sid] : 0; pthread_mutex_unlock(&sid_lock);   /* 65534 and 65535 are the renderer's own scratch surfaces (STAGE_SURF, SHADOW_SURF) */
     return id;                                  /* 0 (all in use): the renderer ignores the surface */
 }
 static void surface_id_free(uint32_t id)        /* after its DSR_SURFACE_DESTROY, so a reuse comes later in the stream */
