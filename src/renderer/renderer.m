@@ -194,7 +194,7 @@ static id<MTLRenderCommandEncoder> enc_for(DSRRenderer *r, uint32_t rt, uint32_t
 static void surface_create(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t id = p[0], w = p[1], h = p[2], kind = p[3], fmt = p[4], parent = p[5], level = p[6];
-    if (id >= MAXSURF) return;
+    if (id >= STAGE_SURF) return;             /* the two ids above are the renderer's own scratch surfaces */
     Surf *s = &r->s[id]; s->tex = nil; s->used = 1; s->shadow = 0; s->w = w; s->h = h; s->kind = kind; s->fmt = fmt; s->level = level; s->root = id; s->sc = 1;
     if (parent && surf(r, parent)) { Surf *root = surf(r, parent); s->tex = root->tex; s->root = parent; return; }   // mip level: shares the root's texture
     if (kind == 3 && parent == 0) {
@@ -608,7 +608,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_DRAW: draw(r, p, size); break;
     case DSR_SET_RT: if (r->rt != p[0]) r->shadow_pending = r->shadow_active = 0; r->rt = p[0]; r->ds = p[1]; break;
     case DSR_SURFACE_CREATE: surface_create(r, p, size); break;
-    case DSR_SURFACE_DESTROY: if (p[0] < MAXSURF) { r->s[p[0]].used = 0; r->s[p[0]].tex = nil; } break;
+    case DSR_SURFACE_DESTROY: if (p[0] && p[0] < STAGE_SURF) { r->s[p[0]].used = 0; r->s[p[0]].tex = nil; } break;
     case DSR_SURFACE_UPLOAD: surface_upload(r, p, size); break;
     case DSR_UPLOAD_OVER: upload_over(r, p, size); break;
     case DSR_READBACK: readback(r, p); break;
