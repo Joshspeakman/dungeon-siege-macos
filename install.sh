@@ -254,6 +254,8 @@ if [ -z "$IN_PLACE" ]; then case "$GAME/" in "$DATA"/*) ;; *)
   rm -rf "$GF"; mv "$GF.part" "$GF"
   echo "== the app reads the game from $GF: $GAME is no longer needed (delete it to free the space)"; GAME="$GF";;
 esac; fi
+mkdir -p "$DATA" "$APPS"; DATA="$(cd "$DATA" && pwd)"; APPS="$(cd "$APPS" && pwd)"; GAME="$(cd "$GAME" && pwd)"   # the updater keeps these, from any working directory
+Q_APPS=$(printf '%q' "$APPS")
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")      # shell-quoted: any folder name is only data
 # updates from the launcher: the branch this app follows (main, or nightly for Nightly), the commit it was built from and
 # the checkout it was installed from; its updater fetches the branch into a worktree there and rebuilds the app from it
@@ -276,7 +278,7 @@ if [ -e "\$W/.git" ]; then git -C "\$W" checkout -q -f --detach "origin/\$BRANCH
 else mkdir -p "\$REPO/build"; git -C "\$REPO" worktree add -q -f --detach "\$W" "origin/\$BRANCH"; fi
 echo "== \$BRANCH: \$(git -C "\$W" log -1 --format='%h %s')"
 [ -e "\$W/recomp/.venv" ] || [ ! -d "\$REPO/recomp/.venv" ] || ln -s "\$REPO/recomp/.venv" "\$W/recomp/.venv"   # share the tools
-exec "\$W/install.sh"$( [ -n "$AS_NIGHTLY" ] && echo " --as-nightly" )
+exec "\$W/install.sh" --game-dir $Q_GAME --data-dir $Q_DATA --app-dir $Q_APPS $( [ -n "$IN_PLACE" ] && echo "--in-place" )$( [ -n "$AS_NIGHTLY" ] && echo " --as-nightly" )
 UPDATE
   chmod +x "$A/Contents/MacOS/update"
 fi
