@@ -5,12 +5,23 @@ Windows components. The installer recompiles **your own copy** of the game from 
 with a macOS implementation of everything the game uses from Windows (windows and input, files, threads, DirectDraw and
 Direct3D 7 on Metal, DirectSound on Core Audio). The result is an ordinary Mac app.
 
-Nothing from the game is in this repository. You need your own copy, and the installer checks that it is the exact
-build it supports.
+Nothing from the game is in this repository or in the download. You need your own copy, and the app checks that it
+is the exact build it supports. There are two ways to install:
+
+- **Download the app** ([Releases](https://github.com/Joshspeakman/dungeon-siege-macos/releases)): drag it to
+  Applications, open it and drop your Dungeon Siege folder on it. It checks your copy, builds the game on your Mac in a
+  few minutes and starts it. No developer tools, no Terminal. See [Install the app](#install-the-app).
+- **Build from source** with `./install.sh` (below): also installs from the GOG offline installer or a Steam depot,
+  adds Legends of Aranna, mods, Yesterhaven and the benchmark in one command, and installs the Nightly app.
 
 **Status: beta.** The single-player campaign, multiplayer (with Mac and Windows players) and the Legends of Aranna
-expansion all play; see [Known issues](#known-issues). Releases: [Beta 1](https://github.com/Joshspeakman/dungeon-siege-macos/releases/tag/beta-1)
-and later on the [releases page](https://github.com/Joshspeakman/dungeon-siege-macos/releases).
+expansion all play; see [Known issues](#known-issues).
+[Beta 3](https://github.com/Joshspeakman/dungeon-siege-macos/releases/tag/beta-3) is the first drag-and-drop download:
+a ready-made app with a setup window in the game's look that builds the game from the folder you drop on it, and
+updates itself from the releases page. It also adds native EAX environmental audio (the launch window's Audio row)
+and runtime fixes. Every release is on the [releases page](https://github.com/Joshspeakman/dungeon-siege-macos/releases).
+
+From source:
 
 ```sh
 xcode-select --install                     # once: clang, git and python3
@@ -28,7 +39,9 @@ The step-by-step guide is **[docs/INSTALL.md](docs/INSTALL.md)**. The sections b
 ## Requirements
 
 - A Mac with **Apple Silicon** (M1 or later). The installer stops on an Intel Mac. The app needs **macOS 13** or newer.
-- The **Xcode Command Line Tools**: `xcode-select --install` (installs `clang`, `git` and `python3`). The full Xcode
+- About 5 GB free for the downloaded app's copy of the game and the built game code (from the same disk the copy is an
+  APFS clone, which takes almost no space).
+- Only to build from source: the **Xcode Command Line Tools**: `xcode-select --install` (installs `clang`, `git` and `python3`). The full Xcode
   isn't needed.
 - On the first build the recompiler makes a Python environment in `recomp/.venv` and installs two helper packages into
   it with pip (`capstone` and `unicorn`), so the first install needs an internet connection.
@@ -48,9 +61,42 @@ The step-by-step guide is **[docs/INSTALL.md](docs/INSTALL.md)**. The sections b
   The disc releases, other patch levels and modified executables are not supported. The Steam executable has no DRM.
   The Legends of Aranna expansion's own executable, `DSLOA.exe`, is never used (see below).
 
+## Install the app
+
+1. Download `Dungeon-Siege.dmg` from the newest [release](https://github.com/Joshspeakman/dungeon-siege-macos/releases),
+   open it and drag **Dungeon Siege** to Applications.
+2. Open it. The first time, macOS stops it, because the app isn't signed with a paid Apple developer certificate:
+   click Done, open System Settings → Privacy & Security, scroll down and click **Open Anyway** next to Dungeon Siege.
+   This is needed once.
+3. A setup window in the game's look asks for your game. Give it your Dungeon Siege folder (GOG or Steam 1.11.1, the
+   one that holds `DungeonSiege.exe`) any of three ways:
+   - drop the folder onto the window;
+   - drop it onto the app's icon (in the Dock or in Applications);
+   - or put it in `~/Games/Dungeon Siege/Put Game Files Here` (the window shows that folder) and open the app again.
+4. The app checks `DungeonSiege.exe` and the game's archives and says what's wrong if anything is. Then it copies the
+   game into `~/Games/Dungeon Siege/game-files`, builds the game's code for your Mac with the compiler it carries
+   (about 3 minutes on an M1 Pro) and opens the launch window. It offers to move the folder you dropped to the Trash;
+   it no longer needs it.
+
+That happens once. Later launches go straight to the launch window; if an update changes the game code, the next
+launch rebuilds it by itself.
+
+| What | Where (downloaded app) |
+|---|---|
+| The app | `/Applications/Dungeon Siege.app` (or wherever you dragged it) |
+| Your game, copied | `~/Games/Dungeon Siege/game-files` |
+| The built game code | `~/Games/Dungeon Siege/recomp` |
+| Saves and the game's settings | `~/Games/Dungeon Siege/drive_c/Users/player/Documents/Dungeon Siege` |
+| Mods, launch window settings, log, crash reports | `~/Games/Dungeon Siege` (`mods/`, `launcher.plist`, `DungeonSiegeNative.log`, `CrashReports/`) |
+
+**Legends of Aranna** with the downloaded app: put the expansion's archives from your own copy in
+`~/Games/Dungeon Siege/expansion`, `Expansion.dsres`, `ExpVoices.dsres` (and `XPRes.dsres` if you have it) in its
+`Resources` folder and `Expansion.dsmap` (and `XPMap.dsmap`) in its `Maps` folder; the launch window's Game row then
+offers it. Saves from an app built from source can be copied into the saves folder above.
+
 ## Getting the game files onto the Mac
 
-Pick one; each is a single `install.sh` command.
+For a source build, pick one; each is a single `install.sh` command.
 
 | You have | Command |
 |---|---|
@@ -59,10 +105,12 @@ Pick one; each is a single `install.sh` command.
 | The Steam edition | In Steam on the Mac, open the console (`steam://open/console`) and run `download_depot 39190 39191`; then `./install.sh --steam` (or `./install.sh --steam "/path/to/the/downloaded/folder"`). The download is copied into the data folder. |
 | A backup made with `--save-collection` | `./install.sh --collection "/path/to/the/collection"` |
 
-Give `--game-dir` an absolute path (for example `"$HOME/Games/Dungeon Siege"`, not a relative one): the app remembers the folder and reads the game's data
-from it every time it starts, so leave that folder where it is. The game folder is only ever read.
+Give `--game-dir` an absolute path (for example `"$HOME/Games/Dungeon Siege"`, not a relative one). The game is
+copied into the data folder (`game-files`; from the same disk an APFS clone, which takes almost no space), so the
+folder you named can be deleted afterwards; `--in-place` reads it there instead, and then it has to stay. The game
+folder is only ever read.
 
-## Installing
+## Build from source
 
 ```sh
 git clone https://github.com/Joshspeakman/dungeon-siege-macos.git
@@ -88,7 +136,8 @@ Every `install.sh` option:
 | `--save-collection DIR` | Write that backup folder from this Mac's current setup. |
 | `--nightly` | Install **Dungeon Siege Nightly.app** next to the stable app, built from the `nightly` branch (see *Updating*). |
 | `--app-dir DIR` | Where the app goes (default `~/Applications`). See the updater limitation below. |
-| `--data-dir DIR` | Where saves, settings and logs go (default `~/Games/DungeonSiegeNative`). See the updater limitation below. |
+| `--data-dir DIR` | Where saves, settings, logs and the copy of the game go (default `~/Games/DungeonSiegeNative`). See the updater limitation below. |
+| `--in-place` | Read the game from `--game-dir` instead of copying it into the data folder (that folder then has to stay). |
 | `--no-downloads` | Skip the two downloads an install makes by default (also `DS_NO_DOWNLOADS=1`). |
 
 `--expansion`, `--mods`, `--yesterhaven` and `--benchmark` work on their own (after the game is installed) or together
@@ -106,7 +155,7 @@ of this project, only for your Mac:
 
 | Location | Contents |
 |---|---|
-| Your game folder | Only read, never changed. |
+| Your game folder | Only read, never changed; copied into `<data>/game-files` (unless `--in-place`), so it can be deleted. |
 | `~/Applications/Dungeon Siege Native.app` | The recompiled game, built on your Mac from your copy. |
 | `~/Games/DungeonSiegeNative` | The data folder: saves and the game's settings (`drive_c/Users/player/Documents/Dungeon Siege`, and `Dungeon Siege LOA` for the expansion), the launch window's choices (`launcher.plist`), mods (`mods/`), the expansion (`expansion/`), the log (`DungeonSiegeNative.log`), update output (`update.log`), crash reports (`CrashReports/`), benchmark results (`Benchmarks/`), and the unpacked or copied game for `--gog-installer`, `--steam` and `--collection`. |
 | The cloned repository | The recompiler, its Python environment (`recomp/.venv`), the generated code (`recomp/work`, never committed) and the update builds (`build/stable`, `build/nightly`). |
@@ -141,7 +190,12 @@ EAX is implemented in software on the Mac: the original Miles provider feeds Dir
 
 ## Updating
 
-**From the app:** the launch window's **Updates** row asks GitHub for the newest commit of the app's branch: `main` for
+**The downloaded app** updates from the releases page: the launch window's **Updates** row shows when a newer release
+(betas included) is out, and pressing it downloads that release and swaps it in. Your game copy, saves, settings and
+mods stay; if the new release changes the game code, the next launch rebuilds it from your copy. If the app sits
+somewhere it can't write to, download the new release and drag it in instead.
+
+**An app built from source:** the launch window's **Updates** row asks GitHub for the newest commit of the app's branch: `main` for
 *Dungeon Siege*, `nightly` for *Dungeon Siege Nightly*. When it says **Update available**, press it. The new version
 is checked out into `build/stable` (or `build/nightly`) inside your clone, the app is rebuilt from your copy of the
 game (with a progress window), and offers a Restart button when it finishes.
@@ -166,7 +220,10 @@ and mods work in either; each keeps its own log. Run it again, or use its Update
 
 ## Uninstalling
 
-Delete `~/Applications/Dungeon Siege Native.app` (and `Dungeon Siege Nightly.app`), the cloned folder, and
+The downloaded app: move `Dungeon Siege.app` to the Trash, and `~/Games/Dungeon Siege` too if you no longer want your
+saves and the game copy.
+
+Built from source: delete `~/Applications/Dungeon Siege Native.app` (and `Dungeon Siege Nightly.app`), the cloned folder, and
 `~/Games/DungeonSiegeNative` if you no longer want your saves. Your game folder was never changed.
 
 ## Features
@@ -236,6 +293,11 @@ Open issues: [github.com/Joshspeakman/dungeon-siege-macos/issues](https://github
 
 ## Troubleshooting
 
+- **macOS says the downloaded app "can't be opened" or "is damaged":** it's unsigned, so use System Settings → Privacy &
+  Security → Open Anyway (see [Install the app](#install-the-app)). "Damaged" means the download was cut short:
+  download it again.
+- **The setup window says the folder isn't Dungeon Siege 1.11.1, or names a missing file:** drop the folder that holds
+  `DungeonSiege.exe` and the `Resources` folder, from an unmodified GOG or Steam 1.11.1 copy.
 - **"not the original GOG or Steam 1.11.1 DungeonSiege.exe"** (or, with `--steam`, "is not Steam's Dungeon Siege
   1.11.1"): the folder holds another version of the game (disc, another patch level, or a modified executable). Point
   the installer at an unmodified GOG or Steam 1.11.1 copy.
