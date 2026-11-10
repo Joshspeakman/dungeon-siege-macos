@@ -609,7 +609,12 @@ int main(int argc, char **argv)
             else if (!strcmp(argv[k], "--game")) game = argv[k + 1];
             else if (!strcmp(argv[k], "--data")) data = argv[k + 1];
         }
+#ifdef DS_EASY_INSTALL
+        int ds_easy_install(const char **, const char **, const char **);   /* setup/setup_ui.m: returns only when the game is ready */
+        if (!exe && !game && !data) { if (ds_easy_install(&exe, &game, &data) < 0) bundle_launch(argv[0], &exe, &game, &data); }
+#else
         if (!exe && !game && !data) bundle_launch(argv[0], &exe, &game, &data);
+#endif
         if (!exe || !game || !data) { fprintf(stderr, "usage: DungeonSiegeNative --exe <DungeonSiege.exe> --game <game folder> --data <data folder>\n"); return 1; }
         NSString *bin = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
         snprintf(dsr_snapshot_path, sizeof dsr_snapshot_path, "%s/dsr_snapshot.bin", bin.UTF8String);

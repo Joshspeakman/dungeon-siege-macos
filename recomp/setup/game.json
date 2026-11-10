@@ -1,0 +1,73 @@
+{
+  "name": "Dungeon Siege",
+  "folder": "Dungeon Siege",
+  "bundle_id": "io.github.joshspeakman.dungeon-siege",
+  "release_repo": "Joshspeakman/dungeon-siege-macos",
+  "binary": "Dungeon Siege",
+  "icon_label": "DS",
+  "version": "1.11.1",
+  "where": "Your Dungeon Siege folder (GOG or Steam, version 1.11.1)",
+  "minutes": 3,
+  "space_gb": 5,
+  "exe": "DungeonSiege.exe",
+  "exe_sha256": {
+    "41f14b145e030f2decd95e9f434ccd1de0729ba13d1c5628c4bd9536ee938a02": "GOG 1.11.1",
+    "c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab": "Steam 1.11.1"
+  },
+  "required": [
+    "Mss32.dll",
+    "BinkW32.dll",
+    "system/mss/Mssfast.m3d",
+    "system/mss/Mp3dec.asi",
+    "system/mss/Msseax.m3d",
+    "system/mss/Msseax2.m3d",
+    "Resources/Logic.dsres",
+    "Resources/Objects.dsres",
+    "Resources/Terrain.dsres",
+    "Resources/Sound.dsres",
+    "Resources/Voices.dsres"
+  ],
+  "exe_patch": [
+    "patch_exe.py"
+  ],
+  "libs": [
+    {
+      "file": "Mss32.dll"
+    },
+    {
+      "file": "system/mss/Mssfast.m3d"
+    },
+    {
+      "file": "system/mss/Mp3dec.asi"
+    },
+    {
+      "file": "BinkW32.dll"
+    },
+    {
+      "file": "system/mss/Msseax.m3d"
+    },
+    {
+      "file": "system/mss/Msseax2.m3d"
+    }
+  ],
+  "art_url": "https://cdn.cloudflare.steamstatic.com/steam/apps/39190/library_hero.jpg",
+  "log": "DungeonSiegeNative",
+  "local_network": "Dungeon Siege hosts and joins multiplayer games on your local network.",
+  "build": "./build.sh \"$GAME/DungeonSiege.exe\" && ./tools/build_app.sh \"$PWD/work/full\"",
+  "out": "work/full",
+  "rt_opt": "-O1",
+  "frameworks": [
+    "AppKit",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "CoreImage"
+  ],
+  "host_cflags": [],
+  "rt_cflags": [],
+  "style": "iron",
+  "title": "DUNGEON SIEGE"
+}
