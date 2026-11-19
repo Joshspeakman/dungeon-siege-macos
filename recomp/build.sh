@@ -33,7 +33,7 @@ fi
 "$PY" "$HERE/tools/link_tables.py" "$OUT" "${IMGS[@]}"
 echo "== compiling"
 rm -rf "$OUT/obj"; mkdir -p "$OUT/obj"
-printf '%s\n' "$OUT"/lift_*.c "$OUT"/*_lift_*.c "$OUT/fntab.c" | xargs -n 1 -P "$(sysctl -n hw.ncpu)" "$HERE/tools/cc1.sh" "$OUT"
+printf '%s\0' "$OUT"/lift_*.c "$OUT"/*_lift_*.c "$OUT/fntab.c" | xargs -0 -n 1 -P "$(sysctl -n hw.ncpu)" "$HERE/tools/cc1.sh" "$OUT"
 rm -f "$OUT/obj/rt.o"
 "$HERE/tools/build_runtime.sh" "$OUT"            # runtime + Win32 layer, then the link
 echo "== $OUT/libgame.dylib"
