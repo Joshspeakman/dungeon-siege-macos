@@ -223,7 +223,13 @@ if [ -n "$GOG_EXE" ]; then       # unpack the installer into the data folder; th
   [ -f "$GOG_EXE" ] || { echo "no such file: $GOG_EXE"; exit 1; }
   command -v innoextract >/dev/null || { echo "innoextract is needed for --gog-installer: brew install innoextract"; exit 1; }
   X="$DATA/gog-extract"; rm -rf "$X"; mkdir -p "$X"; echo "== unpacking $GOG_EXE"
-  innoextract --gog -s -d "$X" "$GOG_EXE"
+  # GOG's offline installer can come in parts (setup_….exe plus setup_…-1.bin, …): innoextract reads the .bin parts
+  # from beside the .exe by their names, so only the .exe is given; nothing needs joining.
+  innoextract --gog -s -d "$X" "$GOG_EXE" || {
+    b="${GOG_EXE%.exe}"; missing=""; [ -f "$b-1.bin" ] || missing=" ($(basename "$b")-1.bin is not there)"
+    echo "unpacking failed$missing: the installer's .bin parts have to be in the same folder as the .exe, with the"
+    echo "names GOG gave them; give install.sh only the .exe. If they are there, download them again (a part may be incomplete)."
+    exit 1; }
   GAME="$(dirname "$(find "$X" -name DungeonSiege.exe -print -quit)")"
   [ -f "$GAME/DungeonSiege.exe" ] || { echo "DungeonSiege.exe not found in the installer"; exit 1; }
 fi

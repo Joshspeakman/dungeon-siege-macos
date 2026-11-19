@@ -101,7 +101,7 @@ For a source build, pick one; each is a single `install.sh` command.
 | You have | Command |
 |---|---|
 | The GOG game installed somewhere (copied from a PC, GOG Galaxy, an old CrossOver or Wine install) | `./install.sh --game-dir "/path/to/Dungeon Siege"` (the folder that holds `DungeonSiege.exe`) |
-| The GOG offline installer, `setup_dungeon_siege_*.exe`, from your GOG library | `./install.sh --gog-installer ~/Downloads/setup_dungeon_siege_*.exe` (needs `innoextract`; the game is unpacked into the data folder) |
+| The GOG offline installer, `setup_dungeon_siege_*.exe`, from your GOG library | `./install.sh --gog-installer ~/Downloads/setup_dungeon_siege_*.exe` (needs `innoextract`; the game is unpacked into the data folder). GOG's current installer, `setup_dungeon_siege_1.11.1_amd_rdna_fix_(52932)`, comes as an `.exe` and a `-1.bin`: keep both in one folder under GOG's names and give only the `.exe`; nothing needs joining |
 | The Steam edition | In Steam on the Mac, open the console (`steam://open/console`) and run `download_depot 39190 39191`; then `./install.sh --steam` (or `./install.sh --steam "/path/to/the/downloaded/folder"`). The download is copied into the data folder. |
 | A backup made with `--save-collection` | `./install.sh --collection "/path/to/the/collection"` |
 
