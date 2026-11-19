@@ -350,3 +350,9 @@ legally obtained copy, and the app reads the game's data and art from that copy 
 game is stored in this repository. It does not remove copy protection. Dungeon Siege is a trademark of its respective
 owners; this project is not affiliated with them. The project's own code is MIT-licensed ([LICENSE](LICENSE)); credits
 are in [NOTICE.md](NOTICE.md).
+
+## Support
+
+If you get some use out of this, you can buy me a coffee on Ko-fi.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/speakerjosh)
