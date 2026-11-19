@@ -1,5 +1,7 @@
 # Dungeon Siege for Apple Silicon Macs
 
+[![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
+
 Play the original **Dungeon Siege** (GOG or Steam, version 1.11.1) natively on an Apple Silicon Mac: no Wine, no Rosetta, no
 Windows components. The installer recompiles **your own copy** of the game from x86 into native arm64 code and links it
 with a macOS implementation of everything the game uses from Windows (windows and input, files, threads, DirectDraw and
@@ -351,8 +353,8 @@ game is stored in this repository. It does not remove copy protection. Dungeon S
 owners; this project is not affiliated with them. The project's own code is MIT-licensed ([LICENSE](LICENSE)); credits
 are in [NOTICE.md](NOTICE.md).
 
-## Support
+## Insert Coin
 
-If you get some use out of this, you can buy me a coffee on Ko-fi.
+If this saved you some time (or saved you from buying something twice), you can buy me a Continue on Ko-fi. It's $5 and it keeps me building stuff like this.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/speakerjosh)
+[![Buy me a Continue on Ko-fi](https://img.shields.io/badge/Buy_me_a_Continue_%7C_%245-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/speakerjosh)
