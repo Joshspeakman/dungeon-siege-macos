@@ -626,7 +626,7 @@ int main(int argc, char **argv)
         init_keymap();
         {   /* the launch window (resolution, view distance, frame rate) unless in test mode */
             int ds_launcher_run(const char *game_dir, const char *data_dir);
-            if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT")) {
+            if (!getenv("DS_TEST") || getenv("DS_LAUNCHER_SHOT") || getenv("DS_LAUNCHER_PLAY")) {   /* (DS_LAUNCHER_PLAY: tests of its Play) */
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
                 if (!ds_launcher_run(game, data)) return 0;
             }

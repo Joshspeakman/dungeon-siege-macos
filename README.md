@@ -185,6 +185,8 @@ menu art. Choose and press **Play** (or Return); every choice is remembered.
   Play, so the in-game Video page needn't be used.
 - **Audio:** Environmental Audio → Standard or EAX. EAX uses the game's environmental settings for native Core Audio reverb and positional effects.
 - **Mods:** a tick list per game, and an *Open Mods Folder* button ([docs/MODS.md](docs/MODS.md)).
+  Before playing, the launcher checks your saves: if one was made with a mod that is now off or no longer installed
+  (loading it without the mod can crash the game), it says which, and offers to turn them back on.
 - **Updates:** see below.
 
 The full table of settings and their choices is in [docs/INSTALL.md](docs/INSTALL.md#playing).
