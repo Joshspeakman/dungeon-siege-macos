@@ -17,6 +17,11 @@ them in one place and lets each game have its own selection.
 - **Choosing:** the launcher's **Mods** row shows how many are on; click it for the list and tick what you want. The
   selection is separate for Dungeon Siege and for Legends of Aranna (the Game row decides which one you are editing).
   The mods below start ticked for the games they belong to; others start unticked.
+- **Saves:** every save lists the archives the game had loaded when it was written. When you press Play, the launcher
+  reads that list for each save of the chosen campaign; if a save was made with a mod that is now unticked (or no
+  longer in the Mods folder), it names the saves and mods, because loading such a save without them can crash the
+  game. *Turn Them On and Play* ticks them for you; *Play Anyway* goes ahead (and won't ask again about the same saves
+  and mods); *Back* returns to the launcher. Archives in the game's own folders are always loaded, so they never count.
 - **Multiplayer:** everyone in a game needs the same archives, mods included; a player who is missing one is told
   which. See [MULTIPLAYER.md](MULTIPLAYER.md).
 

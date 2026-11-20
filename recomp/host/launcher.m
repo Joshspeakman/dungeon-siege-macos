@@ -37,7 +37,7 @@ static NSData *tank_read(NSString *tankPath, NSString *want)
         uint32_t o = fileset + U32(fileset + 4 + 4 * k), parent = U32(o), size = U32(o + 4), foff = U32(o + 8); uint16_t fmt = U16(o + 24), len = U16(o + 28);
         NSString *name = [[NSString alloc] initWithBytes:d + o + 30 length:len encoding:NSISOLatin1StringEncoding];
         if ([[NSString stringWithFormat:@"%@/%@", path(parent), name] caseInsensitiveCompare:want] != NSOrderedSame) continue;
-        uint32_t o2 = (o + 30 + len + 1 + 3) & ~3u;
+        uint32_t o2 = o + ((30u + len + 1 + 3) & ~3u);   /* aligned from the entry, as the format is (not from the file start) */
         if (fmt == 0) return dataoff + foff + size <= n ? [NSData dataWithBytes:d + dataoff + foff length:size] : nil;
         uint32_t chunk = U32(o2 + 4); o2 += 8;
         NSMutableData *out = [NSMutableData dataWithCapacity:size];
@@ -852,6 +852,85 @@ static NSArray *eax_choices(void) {
 
 /* Shows the launch window (modal) unless DS_NO_LAUNCHER is set; returns 0 to quit. DS_LAUNCHER_SHOT=<png> renders it
  * to an image instead (development). */
+// ---------------------------------------------------------------- saves that need mods that are off
+// Each save's info.gas lists every archive the game had loaded when it was written ([tank_manifest] file_name). A save
+// made with a mod that is now off (or no longer in <data>/mods) can crash the game when it is loaded, so the launch
+// window asks before playing. The game's own archives (its Resources and Maps, the expansion's) are not mods.
+static NSArray<NSString *> *save_tank_files(NSString *save)
+{
+    NSData *info = tank_read(save, @"/info.gas");                        /* (a save's files sit in its root folder) */
+    NSString *t = info ? [[NSString alloc] initWithData:info encoding:NSISOLatin1StringEncoding] : nil;
+    NSRange r = t ? [t rangeOfString:@"[tank_manifest]"] : NSMakeRange(NSNotFound, 0); if (r.location == NSNotFound) return @[];
+    NSMutableArray *out = [NSMutableArray array];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"file_name\\s*=\\s*\"?([^\";\\r\\n]+)\"?\\s*;" options:0 error:nil];
+    for (NSTextCheckingResult *m in [re matchesInString:t options:0 range:NSMakeRange(r.location, t.length - r.location)])
+        [out addObject:[[t substringWithRange:[m rangeAtIndex:1]] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
+    return out;
+}
+static NSString *saves_dir(NSString *data, BOOL loa)
+{
+    return [data stringByAppendingFormat:@"/drive_c/Users/player/Documents/%@/Save", loa ? @"Dungeon Siege LOA" : @"Dungeon Siege"];
+}
+/* the saves needing mods that are off: [{save, mods: [names], off: [mod ids that could be turned on]}], newest first */
+static NSArray<NSDictionary *> *saves_needing_mods(NSString *data, NSString *game, NSArray<NSDictionary *> *found, NSSet<NSString *> *on, BOOL loa)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableSet *own = [NSMutableSet set];                                  /* the game's own archives */
+    for (NSString *root in @[game, expansion_dir(data)]) for (NSString *sub in @[@"Resources", @"Maps"])
+        for (NSString *f in [fm contentsOfDirectoryAtPath:[root stringByAppendingPathComponent:sub] error:nil]) [own addObject:f.lowercaseString];
+    NSMutableDictionary *byFile = [NSMutableDictionary dictionary];          /* a mod's file -> the mod */
+    for (NSDictionary *m in found) for (NSString *f in m[@"files"]) byFile[f.lowercaseString] = m;
+    NSString *dir = saves_dir(data, loa); NSMutableArray *saves = [NSMutableArray array];
+    for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        NSString *ext = f.pathExtension.lowercaseString; if (![ext isEqualToString:@"dssave"] && ![ext isEqualToString:@"dsasave"]) continue;
+        NSString *p = [dir stringByAppendingPathComponent:f];
+        [saves addObject:@{@"path": p, @"date": [fm attributesOfItemAtPath:p error:nil].fileModificationDate ?: NSDate.distantPast}];
+    }
+    [saves sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"date"] compare:a[@"date"]]; }];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *s in saves) {
+        NSMutableArray *names = [NSMutableArray array], *off = [NSMutableArray array];
+        for (NSString *f in save_tank_files(s[@"path"])) {
+            NSDictionary *m = byFile[f.lowercaseString];
+            if ([own containsObject:f.lowercaseString]) continue;           /* in the game's folders: loaded either way */
+            if (m) { if (![on containsObject:m[@"id"]] && ![off containsObject:m[@"id"]]) { [off addObject:m[@"id"]]; [names addObject:[m[@"name"] stringByAppendingString:@" (off)"]]; } }
+            else [names addObject:[f stringByAppendingString:@" (not installed)"]];
+        }
+        if (names.count) [out addObject:@{@"save": [s[@"path"] lastPathComponent].stringByDeletingPathExtension, @"mods": names, @"off": off}];
+    }
+    return out;
+}
+static NSAlert *mods_alert(NSArray<NSString *> *lines, BOOL canTurnOn)
+{
+    NSArray *shown = lines.count > 5 ? [[lines subarrayWithRange:NSMakeRange(0, 5)] arrayByAddingObject:[NSString stringWithFormat:@"and %lu more", (unsigned long)(lines.count - 5)]] : lines;
+    BOOL missing = NO; for (NSString *l in lines) if ([l containsString:@"(not installed)"]) missing = YES;
+    NSAlert *a = [NSAlert new];
+    a.messageText = !canTurnOn ? @"Some saved games use mods that aren't installed" : missing ? @"Some saved games use mods that are off or not installed" : @"Some saved games use mods that are off";
+    a.informativeText = [NSString stringWithFormat:@"%@\n\nLoading one of these without its mods can crash the game.", [shown componentsJoinedByString:@"\n"]];
+    if (canTurnOn) [a addButtonWithTitle:@"Turn Them On and Play"];
+    [a addButtonWithTitle:@"Play Anyway"]; [a addButtonWithTitle:@"Back"];
+    return a;
+}
+/* asks before playing when saves need mods that are off: 1 play, 0 back to the window; turns mods on if asked to.
+ * The same list, once played anyway, is not asked about again (launcher.plist modsWarned). */
+static int mods_save_check(NSArray<NSDictionary *> *need, NSMutableSet<NSString *> *on, NSMutableDictionary *warned, NSString *key)
+{
+    if (!need.count) return 1;
+    NSMutableArray *lines = [NSMutableArray array], *turn = [NSMutableArray array];
+    for (NSDictionary *n in need) { [lines addObject:[NSString stringWithFormat:@"%@: %@", n[@"save"], [n[@"mods"] componentsJoinedByString:@", "]]];
+                                    for (NSString *m in n[@"off"]) if (![turn containsObject:m]) [turn addObject:m]; }
+    NSString *sig = [lines componentsJoinedByString:@"\n"];
+    if ([warned[key] isEqualToString:sig]) return 1;
+    NSAlert *a = mods_alert(lines, turn.count > 0);
+    const char *ans = getenv("DS_LAUNCHER_ANSWER");                         /* tests: turn, anyway or back, without the dialog */
+    NSModalResponse r = ans ? (!strcmp(ans, "turn") && turn.count ? 0 : !strcmp(ans, "back") ? 2 : 1) : [a runModal] - NSAlertFirstButtonReturn;
+    if (ans) { printf("launcher: asked \"%s\": %s\n", a.messageText.UTF8String, ans); fflush(stdout); }
+    if (!turn.count && !ans) r++;                                           /* (no first button) */
+    if (r == 0) { [on addObjectsFromArray:turn]; return 1; }
+    if (r == 1) { warned[key] = sig; return 1; }
+    return 0;
+}
+
 int ds_launcher_run(const char *game_dir, const char *data_dir)
 {
     NSString *data = @(data_dir), *plistPath = [data stringByAppendingPathComponent:@"launcher.plist"];
@@ -902,6 +981,20 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     };
     NSArray<NSDictionary *> *found = mods_found(data);
     NSMutableSet *onBase = mods_enabled(saved, found, NO), *onLoa = mods_enabled(saved, found, YES);
+    if (getenv("DS_LAUNCHER_SAVECHECK")) {   /* development: the saves that need mods that are off, for each campaign, printed (DS_LAUNCHER_SAVECHECK=off: with every mod off) */
+        BOOL none = !strcmp(getenv("DS_LAUNCHER_SAVECHECK"), "off");
+        for (int loa = 0; loa < 2; loa++)
+            for (NSDictionary *n in saves_needing_mods(data, @(game_dir), found, none ? [NSSet set] : (loa ? onLoa : onBase), loa))
+                printf("%s: %s: %s (can turn on: %s)\n", loa ? "loa" : "single", [n[@"save"] UTF8String], [[n[@"mods"] componentsJoinedByString:@", "] UTF8String], [[n[@"off"] componentsJoinedByString:@","] UTF8String]);
+        {   /* and the question the window would ask (base game) */
+            NSMutableArray *lines = [NSMutableArray array]; BOOL turn = NO;
+            for (NSDictionary *n in saves_needing_mods(data, @(game_dir), found, none ? [NSSet set] : onBase, NO)) {
+                [lines addObject:[NSString stringWithFormat:@"%@: %@", n[@"save"], [n[@"mods"] componentsJoinedByString:@", "]]]; if ([n[@"off"] count]) turn = YES; }
+            if (lines.count) { NSAlert *q = mods_alert(lines, turn); NSMutableArray *b = [NSMutableArray array]; for (NSButton *x in q.buttons) [b addObject:x.title];
+                               printf("--- %s\n%s\n[%s]\n", q.messageText.UTF8String, q.informativeText.UTF8String, [b componentsJoinedByString:@"] ["].UTF8String); }
+        }
+        return 0;
+    }
     BOOL (^isLoa)(void) = ^BOOL { return [mode.choices[mode.index][@"value"] hasPrefix:@"loa"]; };
     BOOL (^isBench)(void) = ^BOOL { return [mode.choices[mode.index][@"value"] isEqualToString:@"benchmark"]; };
     NSArray *(^modsRow)(void) = ^NSArray * { return isBench() ? @[@{@"value": @"mods", @"label": @"Not used", @"note": @"The benchmark runs without mods"}]
@@ -1016,9 +1109,19 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     v.onPlay = ^{ result = 1; [NSApp stopModal]; };
     v.onQuit = ^{ result = 0; [NSApp stopModal]; };
     [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:w queue:nil usingBlock:^(NSNotification *n) { (void)n; [NSApp stopModal]; }];
-    [NSApp activateIgnoringOtherApps:YES];
-    [w makeKeyAndOrderFront:nil];
-    [NSApp runModalForWindow:w];
+    BOOL autoPlay = getenv("DS_LAUNCHER_PLAY") != NULL;                    /* tests: Play pressed at once, the window never shown */
+    if (!autoPlay) { [NSApp activateIgnoringOtherApps:YES]; [w makeKeyAndOrderFront:nil]; }
+    NSMutableDictionary *warned = [saved[@"modsWarned"] isKindOfClass:NSDictionary.class] ? [saved[@"modsWarned"] mutableCopy] : [NSMutableDictionary dictionary];
+    for (;;) {
+        if (autoPlay) result = 1; else [NSApp runModalForWindow:w];
+        if (!result) break;
+        NSString *m = mode.choices[mode.index][@"value"];
+        if (![m isEqualToString:@"single"] && ![m isEqualToString:@"loa"]) break;   /* (saves belong to the campaigns) */
+        BOOL loa = [m isEqualToString:@"loa"];
+        if (mods_save_check(saves_needing_mods(data, @(game_dir), found, loa ? onLoa : onBase, loa), loa ? onLoa : onBase, warned, mods_key(loa))) break;
+        result = 0; wm.choices = modsRow(); [v setNeedsDisplay:YES];               /* Back: the window again */
+        if (autoPlay) break;
+    }
     [w orderOut:nil];
     if (!result) return 0;
     NSString *rv = res.choices[res.index][@"value"], *dv = dist.choices[dist.index][@"value"], *fv = fps.choices[fps.index][@"value"], *mv = mode.choices[mode.index][@"value"];
@@ -1029,7 +1132,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSString *nv = notch.choices[notch.index][@"value"], *uv = ui.choices[ui.index][@"value"];
     [@{@"interfaceSize": uv, @"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev, @"notch": nv,
        mods_key(NO): onBase.allObjects, mods_key(YES): onLoa.allObjects,
-       [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa} writeToFile:plistPath atomically:YES];
+       [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa, @"modsWarned": warned} writeToFile:plistPath atomically:YES];
     apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev); apply_notch(nv); apply_ui(rv, uv);
     return 1;
 }
