@@ -1,5 +1,7 @@
 # Dungeon Siege for Apple Silicon Macs
 
+![Dungeon Siege, native on Apple Silicon](media/hero.jpg)
+
 Play the original **Dungeon Siege** (GOG or Steam, version 1.11.1) natively on an Apple Silicon Mac: no Wine, no Rosetta, no
 Windows components. The installer recompiles **your own copy** of the game from x86 into native arm64 code and links it
 with a macOS implementation of everything the game uses from Windows (windows and input, files, threads, DirectDraw and
@@ -35,6 +37,14 @@ open ~/Applications/"Dungeon Siege Native.app"
 Keep the clone in a path without spaces: the current compile scripts split source paths on whitespace.
 
 The step-by-step guide is **[docs/INSTALL.md](docs/INSTALL.md)**. The sections below summarise it.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Opening](media/screenshots/screenshot-01-opening.jpg) |
+| ![Farm bridge](media/screenshots/screenshot-02-farm-bridge.jpg) | ![Farm river](media/screenshots/screenshot-03-farm-river.jpg) |
+| ![Character create](media/screenshots/screenshot-05-character-create.jpg) |  |
 
 ## Requirements
 
