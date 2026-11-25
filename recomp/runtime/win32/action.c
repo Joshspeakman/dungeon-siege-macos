@@ -496,20 +496,33 @@ static void hud_fill(Ctx *c, uint32_t hero, double now)
     action_hud.life = LIFE(hero); action_hud.life_max = MAX_LIFE(hero); action_hud.mana = mana; action_hud.mana_max = MAX_MANA(hero);
     if (changed) action_hud.seq++;
 }
+/* a game window is open (the inventory, a shop, a conversation, the options...): steering and abilities pause and the
+ * controller works the pointer. Some interfaces hold always-shown parts too (the inventory's), so for those one window
+ * that only shows with the screen open is asked instead. */
+static int window_visible(Ctx *c, uint32_t shell, const char *window, const char *iface)
+{
+    uint32_t a[2] = {gstr_perm(window), gstr_perm(iface)}, w = ext_thiscall(c, 0x6e06d3u, shell, 2, a);   /* UIShell::FindUIWindow */
+    return w && (ext_thiscall(c, FX("?GetVisible@UIWindow@@QBE_NXZ"), w, 0, 0) & 0xff);
+}
 static int menu_open(Ctx *c)
 {
-    static const char *const ifaces[] = {"inventory", "multi_inventory", "character", "spell", "store", "dialogue_box", "in_game_menu", "journal",
-        "loadsave_game", "options_audio", "options_bindings", "options_game", "options_input", "options_video", "backend_dialog", "gold_transfer",
-        "defeat_menu", "end_game", "lore_book", "hire_stats", "field_commands", "game_console", "world_map"};
+    /* {window, interface}: a window that only shows while that screen is open (the interfaces themselves stay loaded) */
+    static const char *const windows[][2] = {
+        {"button_inventory_exit", "inventory"}, {"pack_mule_button_inventory_exit", "inventory"}, {"character_paperdoll", "character"},
+        {"button_spellbook_close", "spell"}, {"button_gold_human_1", "multi_inventory"}, {"button_cancel", "store"},
+        {"dialogue_main_bg", "dialogue_box"}, {"exit_game_button", "in_game_menu"}, {"button_x", "journal"}, {"button_save_cancel", "loadsave_game"},
+        {"button_ok", "options_audio"}, {"button_ok", "options_game"}, {"button_ok", "options_video"}, {"button_ok", "options_input"},
+        {"button_ok", "options_bindings"}, {"background", "backend_dialog"}, {"button_confirm", "gold_transfer"}, {"defeat_background", "defeat_menu"},
+        {"dialog_box_eg_bg", "end_game"}, {"button_close", "lore_book"}, {"button_stat_okay", "hire_stats"}};
     uint32_t shell = rt_r32(G_MEM, 0x7a065cu); if (!shell) return 0;
-    for (size_t i = 0; i < sizeof ifaces / sizeof *ifaces; i++) {
-        uint32_t n = gpstr(c, ifaces[i]);
-        if (ext_thiscall(c, FX("?IsInterfaceVisible@UIShell@@QAE_NABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), shell, 1, &n) & 0xff) {
-            static const char *was; if (was != ifaces[i]) { was = ifaces[i]; LOG("window open: %s\n", ifaces[i]); }
-            return 1;
-        }
+    const char *open = 0;
+    for (size_t i = 0; i < sizeof windows / sizeof *windows && !open; i++) {
+        uint32_t n = gpstr(c, windows[i][1]);
+        if ((ext_thiscall(c, FX("?IsInterfaceVisible@UIShell@@QAE_NABV?$gpbstring@DU?$char_traits@D@std@@V?$allocator@D@2@@@@Z"), shell, 1, &n) & 0xff)
+            && window_visible(c, shell, windows[i][0], windows[i][1])) open = windows[i][1];
     }
-    return 0;
+    static const char *was; if (was != open) { was = open; LOG("window open: %s\n", open ? open : "(none)"); }
+    return open != 0;
 }
 static void hero_name(Ctx *c, uint32_t go, char *out, size_t cap)
 {
