@@ -102,7 +102,7 @@ void rt_hook(Ctx *c, uint32_t addr)
 int rt_override(Ctx *c, uint32_t addr)
 {
     extern int loa_active; int loa_override(Ctx *, uint32_t);
-    if (addr == 0x4e72f3u || addr == 0x43b01eu || addr == 0x57470du || addr == 0x5d281fu) {   /* Action Mode (DS_ACTION): steering, party, keys, the hero's jobs */
+    if (addr == 0x4e72f3u || addr == 0x43b01eu || addr == 0x57470du || addr == 0x5d281fu || addr == 0x5a97b8u) {   /* Action Mode (DS_ACTION): steering, party, keys, the hero's jobs */
         int action_override(Ctx *, uint32_t); if (action_override(c, addr)) return 1;
     }
     if (addr == 0x41aea9u) {                      /* W32_CRCLOG=<path>: the checksums FuBi's sync digest is built from */

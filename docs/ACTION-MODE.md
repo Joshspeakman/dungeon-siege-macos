@@ -60,10 +60,10 @@ What slots 1 and 3 do depends on what the hero holds:
 
 | Slot | Melee weapon | Ranged weapon | Spell | Cooldown |
 |---|---|---|---|---|
-| Dodge | dash 4.5 m the way you're steering (else away from the nearest enemy) | | | 0.9 s |
+| Dodge | a quick step (4.5 m) the way you're steering, else away from the nearest enemy; nothing hurts the hero for 0.6 s | | | 0.9 s |
 | 1 | **Cleave**: every enemy in an arc within reach, 110% damage | **Volley**: up to five enemies ahead, 85% each | **Nova**: every enemy within 7 m, 100% (mana) | 3-4.5 s |
 | 2 | **Second Wind**: heal 35% of maximum life | | | 30 s |
-| 3 | **Charge**: rush the first enemy ahead, 180% | **Power Shot**: the first enemy ahead, 240% | **Chain Lightning**: up to six enemies, 90% each (mana) | 6-7 s |
+| 3 | **Charge**: a heavy blow on the first enemy ahead, 180% (the hero closes in on it) | **Power Shot**: the first enemy ahead, 240% | **Chain Lightning**: up to six enemies, 90% each (mana) | 6-7 s |
 | 4 | **Rally**: the whole party heals 25% of life and 20% of mana | | | 60 s |
 
 Damage is the hero's own damage with what is in hand (the game's damage range for that weapon or spell, with the
@@ -96,6 +96,9 @@ With Action Mode off every hook returns at once: the Classic game, its saves and
   keys are live, so never while typing).
 - **Once a frame** (at `WorldTime::Update`, not while paused or while a game window is open): pick the hero, steer,
   use abilities, keep the party guarding, pick up gold, watch fights for drops and packs, fill the overlay's numbers.
+- **Dodge.** The engine has no faster way to move a hero than its walk (its speed settings change nothing measurable,
+  and a position set from outside is taken back by the movement planner), so Dodge is a short walk; what makes it a
+  dodge is that every hit on the hero is turned down for 0.6 s, where all damage lands (`Rules`, 0x5a97b8).
 - **Your orders only.** `GoMind::SDoJob` is asked first: for the hero you play, a move, follow, patrol, flee, guard or
   attack job its own brain (`ao_reflex`) asks for is turned down (attacks in reach while you stand still excepted).
   Orders from you, from scripts and cutscenes, and from the party go through.

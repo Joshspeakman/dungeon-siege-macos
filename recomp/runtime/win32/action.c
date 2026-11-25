@@ -209,7 +209,9 @@ static void companions(Ctx *c, uint32_t *m, int n, double now)
 }
 
 /* ---------------------------------------------------------------- steering */
+static Ctx *aim_ctx;                        /* the game thread's context while a frame runs (for aim) */
 static double last_order; static float last_dx, last_dz;
+static uint32_t leg; static float last_ix, last_iy;         /* the leg being walked (guest SiegePos) and the input that asked for it */
 static int place_ahead(Ctx *c, uint32_t hero, V3 dir, float dist, uint32_t out)
 {
     uint32_t hp = go_pos(c, hero); if (!hp) return 0;
@@ -253,7 +255,7 @@ static void steer(Ctx *c, double now)
     V3 d = {f.x * y + r.x * x, 0, f.z * y + r.z * x};
     /* One leg of 4.5 m at a time, so the walk isn't interrupted: a new one when the direction asked for changes (in
      * input space: the world frame turns with the camera's node), when the leg is nearly walked, or every half second */
-    static uint32_t leg; static float last_ix, last_iy; if (!leg) leg = heap_alloc(w32_process_heap, 8, 16);
+    if (!leg) leg = heap_alloc(w32_process_heap, 8, 16);
     if (steering) {
         uint32_t hp = go_pos(c, hero), a[2] = {leg, hp};
         float left = hp ? (float)ext_call_f(c, 0x678deau, 2, a) : 0;          /* GetSiegeDistance */
@@ -365,7 +367,18 @@ static int foes(Ctx *c, uint32_t hero, float radius, Foe *out, int max)
     return m;
 }
 /* the way the player is facing the action: the direction last steered (for a moment after), else none (any way) */
-static int aim(V3 *d, double now) { if (now - last_order > 1.2) return 0; d->x = last_dx; d->y = 0; d->z = last_dz; return 1; }
+static int aim(V3 *d, double now)
+{
+    if (now - last_order > 1.2 || !controlled) return 0;
+    /* in this frame's world: towards the leg being walked, else the last input turned by the camera as it is now (the
+     * world frame follows the camera's node, so a direction stored earlier may have turned) */
+    Ctx *c = aim_ctx; V3 h = world(c, go_pos(c, controlled)), t = leg ? world(c, leg) : h;
+    float dx = t.x - h.x, dz = t.z - h.z, l = sqrtf(dx * dx + dz * dz);
+    if (l > 0.3f) { d->x = dx / l; d->y = 0; d->z = dz / l; return 1; }
+    V3 f; if (!camera_forward(c, &f)) return 0;
+    V3 r = {-f.z, 0, f.x}; d->x = f.x * last_iy + r.x * last_ix; d->y = 0; d->z = f.z * last_iy + r.z * last_ix;
+    l = sqrtf(d->x * d->x + d->z * d->z); if (l < 1e-3f) return 0; d->x /= l; d->z /= l; return 1;
+}
 static int in_front(const Foe *f, V3 d, int have, float cos_half) { return !have || f->dx * d.x + f->dz * d.z >= cos_half; }
 static void attack(Ctx *c, uint32_t hero, uint32_t target)
 {
@@ -382,14 +395,10 @@ static void toast(const char *fmt, ...)
     action_hud.toast_until = now_s() + 2.2; action_hud.seq++;
 }
 static double cd_until[ACTION_SLOTS], cd_len[ACTION_SLOTS];
-static double dash_until; static uint32_t dash_body; static float dash_saved, dash_set;
-static void dash_end(Ctx *c)
-{
-    if (!dash_body) return;
-    if (controlled && GO_BODY(controlled) == dash_body && rt_rf32(G_MEM, dash_body + 0x2c) == dash_set)
-        rt_wf32(G_MEM, dash_body + 0x2c, dash_saved);                 /* GoBody max move velocity */
-    dash_body = 0; dash_until = 0;
-}
+/* Dodge: a quick step out of the way, and for 0.6 s nothing hurts the hero (the damage is turned down where every hit
+ * lands, Rules 0x5a97b8). The engine's own speed settings don't make anyone faster (measured: walking pace either way),
+ * so the step is a walk; the safety is what makes it a dodge. */
+static double untouchable_until; static uint32_t untouchable_goid;
 static const char *slot_name(int slot, int kind)
 {
     static const char *const names[ACTION_SLOTS][3] = {
@@ -419,17 +428,16 @@ static int use_slot(Ctx *c, uint32_t hero, int slot, double now)
     if (cost > 0 && MANA(hero) < cost) { toast("Not enough mana for %s", name); return 0; }
     Foe f[24]; V3 d; int have = aim(&d, now), n, used = 0;
     switch (slot) {
-    case 0: {                                                        /* Dodge: a quick dash where you're steering (or away from the nearest foe) */
+    case 0: {                                                        /* Dodge: a step where you're steering (or away from the nearest foe) */
         V3 dir = d;
         if (!have) { n = foes(c, hero, 12, f, 1); if (n) { dir.x = -f[0].dx; dir.z = -f[0].dz; } else if (!camera_forward(c, &dir)) return 0; }
-        uint32_t body = GO_BODY(hero), mind = GO_MIND(hero); if (!body || !mind) return 0;
+        uint32_t mind = GO_MIND(hero); if (!mind) return 0;
         uint32_t esp = c->esp, tgt = scratch(c, 16);
         if (place_ahead(c, hero, dir, 4.5f, tgt)) {
-            dash_end(c);
-            dash_body = body; dash_saved = rt_rf32(G_MEM, body + 0x2c); dash_set = dash_saved * 2.6f; rt_wf32(G_MEM, body + 0x2c, dash_set);
-            dash_until = now + 0.45;
             uint32_t a[3] = {tgt, enum_val(c, "eQPlace", "qp_clear", 0), enum_val(c, "eActionOrigin", "ao_human", 0)};
             ext_thiscall(c, FX("?RSMove@GoMind@@QAEXABUSiegePos@@W4eQPlace@@W4eActionOrigin@@@Z"), mind, 3, a);
+            untouchable_goid = GO_GOID(hero); untouchable_until = now + 0.6;
+            effect(c, "dust_explosion_small", hero, hero);
             last_order = now; used = 1;
         }
         c->esp = esp; break;
@@ -460,10 +468,6 @@ static int use_slot(Ctx *c, uint32_t hero, int slot, double now)
             for (int i = 0, k = 0; i < n && k < 6; i++) if (in_front(&f[i], d, have, 0.0f)) { hit(c, hero, f[i].go, 0.9f, "lightning_bolt"); used++; k++; }
         } else {                                                     /* Charge / Power Shot: the first enemy ahead, hard */
             for (int i = 0; i < n; i++) if (in_front(&f[i], d, have, 0.6f)) {
-                if (kind == K_MELEE && f[i].dist > 2.5f) {           /* rush in */
-                    uint32_t body = GO_BODY(hero);
-                    if (body) { dash_end(c); dash_body = body; dash_saved = rt_rf32(G_MEM, body + 0x2c); dash_set = dash_saved * 2.4f; rt_wf32(G_MEM, body + 0x2c, dash_set); dash_until = now + 0.9; }
-                }
                 attack(c, hero, f[i].go); hit(c, hero, f[i].go, kind == K_MELEE ? 1.8f : 2.4f, kind == K_MELEE ? "rock_fist_dust" : "hit_beam_15_lor"); used = 1; break;
             }
         }
@@ -512,6 +516,7 @@ static void interact(Ctx *c, uint32_t hero, double now)
 }
 /* gold and potions on the ground near the hero you play are picked up when it stands idle with no enemy close, as in
  * Diablo (everything else stays for you, or Z to collect all loot) */
+static uint32_t pickup_failed[64];
 static void pick_up_gold(Ctx *c, uint32_t hero, double now)
 {
     static double last; if (now - last < 0.5 || steering || now - last_order < 0.6) return; last = now;
@@ -526,12 +531,19 @@ static void pick_up_gold(Ctx *c, uint32_t hero, double now)
         uint32_t j = (uint32_t)i, g = ext_thiscall(c, FX("?Get@GopColl@@ABEPAVGo@@H@Z"), coll, 1, &j); if (!g) continue;
         if (!(ext_thiscall(c, FX("?IsItem@Go@@QBE_NXZ"), g, 0, 0) & 0xff)) continue;
         if (ext_thiscall(c, FX("?GetParent@Go@@QBEPAV1@XZ"), g, 0, 0)) continue;                  /* carried by someone */
+        int skip = 0; for (int b = 0; b < 64; b++) if (pickup_failed[b] == g) skip = 1;
+        if (skip) continue;
         if ((ext_thiscall(c, FX("?IsGold@Go@@QBE_NXZ"), g, 0, 0) & 0xff) || (ext_thiscall(c, FX("?IsPotion@Go@@QBE_NXZ"), g, 0, 0) & 0xff)) best = g;
     }
+    /* one that is still lying there after a try (the pack is full, it can't be reached) is left alone from then on */
+    static uint32_t tried; static double tried_at; static int nfailed;
+    if (best && best == tried && now - tried_at < 3.0) best = 0;               /* still on its way */
+    else if (best && best == tried) { pickup_failed[nfailed++ % 64] = best; LOG("leaving %08x where it is\n", best); best = 0; }
     ext_thiscall(c, FX("?Clear@GopColl@@AAEXXZ"), coll, 0, 0);
     if (!best) return;
     uint32_t b[3] = {best, enum_val(c, "eQPlace", "qp_clear", 0), enum_val(c, "eActionOrigin", "ao_human", 0)};
     ext_thiscall(c, FX("?RSGet@GoMind@@QAEXPAVGo@@W4eQPlace@@W4eActionOrigin@@@Z"), mind, 3, b);
+    tried = best; tried_at = now;
     LOG("picking up %08x\n", best);
 }
 /* ---------------------------------------------------------------- pace: drops and packs
@@ -597,12 +609,20 @@ static void pace(Ctx *c, uint32_t hero, double now)
             members[nm++] = GO_GOID(f[j].go); same++;
         }
         int counted = 0; for (int j = 0; j < nm; j++) if (members[j] != gi && was_packed(members[j])) counted = 1;   /* the group was counted already */
+        for (int j = 0; j < nm && !counted; j++) {                   /* or it has a copy in it (no content id): grown before a reload */
+            uint32_t g = ext_thiscall(c, FX("?GetGo@Goid_@@ABEPAVGo@@XZ"), members[j], 0, 0), scid = g ? ext_thiscall(c, FX("?GetScid@Go@@QBEPBUScid_@@XZ"), g, 0, 0) : 1;
+            if (verbose()) LOG("pack member %08x scid %08x\n", members[j], scid);
+            if (!scid || scid == 0xffffffffu) counted = 1;
+        }
         for (int j = 0; j < nm; j++) mark_packed(members[j]);
         if (counted || same < 2 || n > 24 || rand() % 2) continue;
         char tcopy[96]; snprintf(tcopy, sizeof tcopy, "%s", tn);
         uint32_t esp = c->esp, pos = go_pos(c, f[i].go); uint8_t p16[16]; memcpy(p16, GP(pos), 16); c->esp = esp;
         uint32_t g = spawn(c, tcopy, p16, 1.3f, -1.1f); if (g) mark_packed(g);
-        LOG("pack of %d %s: one more (%08x)\n", same, tcopy, g);
+        uint32_t cg = g ? ext_thiscall(c, FX("?GetGo@Goid_@@ABEPAVGo@@XZ"), g, 0, 0) : 0, hm = GO_MIND(hero);
+        LOG("pack of %d %s: one more (%08x: %s, %s, scid %08x)\n", same, tcopy, g, cg && is_alive(c, cg) ? "alive" : "not alive",
+            cg && hm && (ext_thiscall(c, FX("?IsEnemy@GoMind@@QBE_NPBVGo@@@Z"), hm, 1, &cg) & 0xff) ? "an enemy" : "not an enemy",
+            cg ? ext_thiscall(c, FX("?GetScid@Go@@QBEPBUScid_@@XZ"), cg, 0, 0) : 0);
     }
 }
 
@@ -680,11 +700,11 @@ static void test_party(Ctx *c, uint32_t hero)
     }
 }
 
-/* the world was left or is being reloaded: every Go pointer from it is gone (a dash's speed went with its body) */
+/* the world was left or is being reloaded: every Go pointer from it is gone */
 static void forget_world(void)
 {
-    controlled = controlled_mind = 0; steering = 0; dash_body = 0; dash_until = 0; memset(guarding, 0, sizeof guarding);
-    memset(slot_request, 0, sizeof slot_request); interact_request = 0; nwatched = 0; npacked = 0;
+    controlled = controlled_mind = 0; steering = 0; untouchable_goid = 0; memset(guarding, 0, sizeof guarding);
+    memset(slot_request, 0, sizeof slot_request); interact_request = 0; nwatched = 0; npacked = 0; memset(pickup_failed, 0, sizeof pickup_failed);
 }
 /* DS_ACTIONLOG=2: how evenly the hero walks while steered (per-frame distance, GetSiegeDistance), summed up at each stop */
 static void speed_probe(Ctx *c, double now)
@@ -724,11 +744,17 @@ static void frame(Ctx *c)
 {
     uint32_t ws = rt_r32(G_MEM, rt_r32(G_MEM, 0x7a05c0u) + 0x20);
     if (!(w32_callback(c, FX("?IsInGame@@YA_NW4eWorldState@@@Z"), 1, &ws) & 0xff)) { forget_world(); if (action_hud.in_game) { action_hud.in_game = 0; action_hud.seq++; } return; }
-    double now = now_s();
+    double now = now_s(); aim_ctx = c;
+    if (ws == 27) { if (steering) steering = 0; return; }             /* ws_sp_nis: a cutscene plays: nothing of ours */
     static int once; if (!once) { once = 1; LOG("in game (world state %u)\n", ws); }
     uint32_t m[16]; int n = party_members(c, m, 16); if (!n) return;
     if (once == 1) { once = 2; LOG("party of %d\n", n); }
     uint32_t want = pick_controlled(c, m, n);
+    if (want && !is_selected(c, want)) {                             /* the one you played is down: the new one is selected (camera, portraits) */
+        int any = 0; for (int i = 0; i < n; i++) if (is_selected(c, m[i]) && is_alive(c, m[i])) any = 1;
+        if (!any) { uint32_t on = 1; ext_thiscall(c, FX("?Select@Go@@QAE_N_N@Z"), want, 1, &on);
+                    uint32_t off = 0; for (int i = 0; i < n; i++) if (m[i] != want && is_selected(c, m[i])) ext_thiscall(c, FX("?Select@Go@@QAE_N_N@Z"), m[i], 1, &off); }
+    }
     if (once == 2) { once = 3; LOG("picked %08x\n", want); }
     if (want != controlled) { take_control(c, want); memset(guarding, 0, sizeof guarding); }
     static int tested; if (!tested && controlled) { tested = 1; test_party(c, controlled); }
@@ -738,7 +764,6 @@ static void frame(Ctx *c)
     }
     static double menu_t; static int menu; if (now - menu_t > 0.1) { menu_t = now; menu = menu_open(c); }
     if (action_hud.menu_open != menu) { action_hud.menu_open = menu; action_hud.seq++; }
-    if (dash_until && now > dash_until) dash_end(c);
     for (int vk = '1'; vk <= '4'; vk++) if (!(w32_keys[vk] & 0x80)) steer_key_seen[vk] = 0;
     if (!(w32_keys[' '] & 0x80)) steer_key_seen[' '] = 0;
     uint32_t app = rt_r32(G_MEM, 0x79cf74u); int paused = app && G_MEM[app + 0x7c];   /* AppModule::IsUserPaused */
@@ -790,6 +815,11 @@ int action_override(Ctx *c, uint32_t addr)
         if (!drop) return 0;
         { static double t; double n = now_s(); if (n - t > 2) { t = n; LOG("turned down job %u for the hero you play\n", rt_r32(G_MEM, ARG(0))); } }
         c->eax = 0; c->esp += 4 + 4; return 1;        /* no job */
+    }
+    case 0x5a97b8: {                                  /* Rules: damage (Goid victim, Goid attacker, Goid weapon, float, bool, bool, int) */
+        if (!untouchable_goid || ARG(0) != untouchable_goid || ARG(1) == untouchable_goid || now_s() > untouchable_until) return 0;
+        { static double t; double n = now_s(); if (n - t > 0.3) { t = n; LOG("dodged %.1f damage\n", ARGF(3)); } }
+        c->eax = 0; c->esp += 4 + 28; return 1;        /* no damage while dodging */
     }
     case 0x57470d: {                                  /* WorldTime::Update: once a frame on the game's thread */
         uint32_t eax = c->eax, ecx = c->ecx, edx = c->edx, top = c->top;   /* the caller's registers: `this` is in ecx */
