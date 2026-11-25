@@ -49,6 +49,8 @@ It goes where you send it and nowhere else: the engine's own jobs for it that wo
 enemy are turned down. While you stand still it still defends itself against an enemy already in reach (about 3 m
 with a melee weapon, its range with a bow or a spell); while you walk it doesn't stop to fight. Its other jobs go on as
 usual (potions, getting up, dying), and nothing about the hero itself changes, so saves are the same as in Classic.
+An attack you order while walking (A, a click on an enemy) plays out: the walking waits until you let go of the
+direction or turn well away from it.
 
 Every other party member gets the game's **Guard** order on you: they follow you and fight what attacks you, with
 their own AI. Select another hero (a portrait, `,` `.`, or the D-pad) and you play that one instead; the others guard
