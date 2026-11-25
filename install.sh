@@ -303,6 +303,7 @@ L="\$DATA/$APP_LOG.log"                                   # keep the log small: 
 B="\$(cd "\$(dirname "\$0")" && pwd)"
 export DS_LOG_FILE="\$L"                                    # crash reports attach this app's own log
 [ -x "\$B/update" ] && export DS_UPDATER="\$B/update" DS_UPDATE_BRANCH=$U_BRANCH DS_BUILT_COMMIT=$U_BUILT   # the launcher's Updates row
+$( [ -n "$AS_ACTION" ] && echo 'export DS_DEFAULT_STYLE=action                            # the Action Mode app: Play Style Action to start with' )
 exec "\$B/DungeonSiegeNative" --exe "\$B/../Resources/DungeonSiege.exe" --game "\$GAME" --data "\$DATA" 2>>"\$DATA/$APP_LOG.log"
 LAUNCH
 chmod +x "$A/Contents/MacOS/launcher"
@@ -311,6 +312,7 @@ chmod +x "$A/Contents/MacOS/launcher"
 P="$A/Contents/Resources/launch.plist"; plutil -create xml1 "$P"
 plutil -insert game -string "$GAME" "$P"; plutil -insert data -string "$DATA" "$P"; plutil -insert log -string "$APP_LOG" "$P"
 plutil -insert exe -string DungeonSiege.exe "$P"; plutil -insert branch -string "$U_BRANCH" "$P"; plutil -insert built -string "$U_BUILT" "$P"
+[ -n "$AS_ACTION" ] && plutil -insert style -string action "$P"     # the Action Mode app starts in Play Style: Action
 cat > "$A/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

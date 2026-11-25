@@ -601,6 +601,7 @@ static int bundle_launch(const char *argv0, const char **exe, const char **game,
     freopen(log.fileSystemRepresentation, "a", stderr);
     setenv("DS_LOG_FILE", log.fileSystemRepresentation, 1);                                      /* crash reports attach this log */
     NSString *upd = [bin stringByAppendingPathComponent:@"update"];
+    if (cfg[@"style"]) setenv("DS_DEFAULT_STYLE", [cfg[@"style"] UTF8String], 1);                  /* the launcher's Play Style to start with */
     if ([fm isExecutableFileAtPath:upd] && cfg[@"branch"]) {                                       /* the launcher's Updates row */
         setenv("DS_UPDATER", upd.fileSystemRepresentation, 1); setenv("DS_UPDATE_BRANCH", [cfg[@"branch"] UTF8String], 1);
         setenv("DS_BUILT_COMMIT", [cfg[@"built"] ?: @"" UTF8String], 1);

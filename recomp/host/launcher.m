@@ -378,7 +378,8 @@ static NSArray<NSDictionary *> *style_choices(void)
 }
 static NSInteger default_style_index(void)   /* Action in the Action Mode app, Classic everywhere else */
 {
-    const char *b = getenv("DS_UPDATE_BRANCH"); return b && !strcmp(b, "action-mode") ? 0 : 2;
+    const char *d = getenv("DS_DEFAULT_STYLE"), *b = getenv("DS_UPDATE_BRANCH");
+    return (d && !strcmp(d, "action")) || (b && !strcmp(b, "action-mode")) ? 0 : 2;
 }
 static void apply_style(NSString *v)
 {
