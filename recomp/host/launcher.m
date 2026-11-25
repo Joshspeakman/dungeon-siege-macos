@@ -1039,7 +1039,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     graphics.title = @"Graphics"; graphics.rows = @[flt, det, gsh, shd, she];
     modsSec.title = @"Mods"; modsSec.summary = ^NSString * { return mods.choices[mods.index][@"label"]; };
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
-    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 760)];
+    DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 760 + 74)];   /* (+74: the Play Style row) */
     v.top = @[mode, style]; v.sections = @[display, graphics, audio, modsSec, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
     void (^check)(void) = ^{

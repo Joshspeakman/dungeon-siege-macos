@@ -133,8 +133,8 @@ static int stolen_key(uint32_t vk) { return vk == 'W' || vk == 'A' || vk == 'S' 
 
 /* ---------------------------------------------------------------- the controlled hero and the party */
 static uint32_t controlled;                 /* the hero being steered (Go) */
+static int companions_now;                  /* guard orders due at once (the hero just started walking) */
 static uint32_t guarding[16];               /* party member -> the hero it was told to guard */
-static uint32_t saved_move_orders[16][2];   /* {go, orders + 1}: the controlled hero's own movement orders, given back */
 
 static uint32_t pick_controlled(Ctx *c, uint32_t *m, int n)
 {
@@ -143,40 +143,33 @@ static uint32_t pick_controlled(Ctx *c, uint32_t *m, int n)
     for (int i = 0; i < n; i++) if (is_alive(c, m[i])) return m[i];
     return 0;
 }
-static void set_move_orders(Ctx *c, uint32_t go, const char *orders)
-{
-    uint32_t mind = GO_MIND(go); if (!mind) return;
-    uint32_t v = enum_val(c, "eMovementOrders", orders, 0xffffffffu); if (v == 0xffffffffu) return;
-    uint32_t cur = ext_thiscall(c, FX("?GetMovementOrders@GoMind@@QBE?AW4eMovementOrders@@XZ"), mind, 0, 0);
-    if (cur == v) return;
-    ext_thiscall(c, FX("?RSSetMovementOrders@GoMind@@QAEXW4eMovementOrders@@@Z"), mind, 1, &v);
-}
 static void take_control(Ctx *c, uint32_t go)
 {
     if (go == controlled) return;
-    if (controlled) {                        /* the old hero gets its own movement orders back */
-        for (int i = 0; i < 16; i++) if (saved_move_orders[i][0] == controlled) {
-            uint32_t mind = GO_MIND(controlled), v = saved_move_orders[i][1] - 1;
-            if (mind) ext_thiscall(c, FX("?RSSetMovementOrders@GoMind@@QAEXW4eMovementOrders@@@Z"), mind, 1, &v);
-            saved_move_orders[i][0] = 0;
-        }
-    }
     controlled = go;
     if (!go) return;
-    uint32_t mind = GO_MIND(go);
-    if (mind) {
-        int k = 0; while (k < 16 && saved_move_orders[k][0]) k++;
-        if (k < 16) { saved_move_orders[k][0] = go; saved_move_orders[k][1] = ext_thiscall(c, FX("?GetMovementOrders@GoMind@@QBE?AW4eMovementOrders@@XZ"), mind, 0, 0) + 1; }
-    }
-    set_move_orders(c, go, "mo_hold");      /* it stays where you put it: no chasing on its own */
     char nm[40]; hero_name(c, go, nm, sizeof nm); snprintf((char *)action_hud.hero, sizeof action_hud.hero, "%s", nm);
     static int first = 1; if (!first) toast("Playing as %s", nm); first = 0;
     LOG("controlling %08x (%s)\n", go, nm);
 }
+/* The hero you play acts only on your orders: the engine's own jobs for it that would walk it somewhere or start a fight
+ * (its brain chasing an enemy it saw, wandering back to a spot, picking a target) are turned down at GoMind::SDoJob.
+ * Its other jobs (dying, getting up, drinking potions, its auto-cast heals) go on as usual, and nothing about the hero
+ * itself changes, so saves are the same as in Classic. */
+static int unasked_job(Ctx *c, uint32_t mind, uint32_t req)
+{
+    if (!controlled || !req || mind != GO_MIND(controlled)) return 0;
+    if (rt_r32(G_MEM, req + 0xc) == enum_val(c, "eActionOrigin", "ao_human", 1)) return 0;   /* JobReq {jat, jq, qp, origin, ...} */
+    static const char *const kinds[] = {"jat_move", "jat_follow", "jat_patrol", "jat_flee_from_object", "jat_guard", "jat_attack_object",
+        "jat_attack_object_melee", "jat_attack_object_ranged", "jat_attack_position", "jat_attack_position_melee", "jat_attack_position_ranged"};
+    uint32_t jat = rt_r32(G_MEM, req);
+    for (size_t i = 0; i < sizeof kinds / sizeof *kinds; i++) if (jat == enum_val(c, "eJobAbstractType", kinds[i], 0xfffffffeu)) return 1;
+    return 0;
+}
 /* the other members guard the controlled hero; the order is given again when they finish it or drift away */
 static void companions(Ctx *c, uint32_t *m, int n, double now)
 {
-    static double last; if (now - last < 0.75) return; last = now;
+    static double last; if (now - last < 0.75 && !companions_now) return; last = now; companions_now = 0;
     uint32_t hero = controlled; if (!hero) return;
     uint32_t qp = enum_val(c, "eQPlace", "qp_clear", 0), ao = enum_val(c, "eActionOrigin", "ao_human", 0);
     uint32_t jat_guard = enum_val(c, "eJobAbstractType", "jat_guard", 0xffffffffu);
@@ -228,6 +221,11 @@ static void steer(Ctx *c, double now)
         steering = 0; return;
     }
     x /= m; y /= m;
+    if (!steering) {                                                 /* starting to walk: you are this one hero now */
+        uint32_t pm[16]; int np = party_members(c, pm, 16); uint32_t off = 0;
+        for (int i = 0; i < np; i++) if (pm[i] != hero && is_selected(c, pm[i])) ext_thiscall(c, FX("?Select@Go@@QAE_N_N@Z"), pm[i], 1, &off);
+        companions_now = 1;
+    }
     V3 f; if (!camera_forward(c, &f)) return;
     V3 r = {-f.z, 0, f.x};                                           /* right of forward on screen (siege space is right-handed) */
     if (getenv("DS_ACTION_FLIPX")) { r.x = -r.x; r.z = -r.z; }
@@ -350,6 +348,7 @@ static void attack(Ctx *c, uint32_t hero, uint32_t target)
 static void toast(const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt); vsnprintf((char *)action_hud.toast, sizeof action_hud.toast, fmt, ap); va_end(ap);
+    LOG("message: %s\n", (const char *)action_hud.toast);
     action_hud.toast_until = now_s() + 2.2; action_hud.seq++;
 }
 static double cd_until[ACTION_SLOTS], cd_len[ACTION_SLOTS];
@@ -384,6 +383,7 @@ static int use_slot(Ctx *c, uint32_t hero, int slot, double now)
     int kind = weapon_kind(c, hero); const char *name = slot_name(slot, kind);
     if (!*name) return 0;
     if (now < cd_until[slot]) return 0;
+    if (slot && !(w32_callback(c, 0x51ed95u, 0, 0) & 0xff)) { toast("Abilities work in single player and for the host"); return 0; }   /* IsServerLocal: damage is the host's */
     float cost = slot_cost(c, hero, slot, kind);
     if (cost > 0 && MANA(hero) < cost) { toast("Not enough mana for %s", name); return 0; }
     Foe f[24]; V3 d; int have = aim(&d, now), n, used = 0;
@@ -479,6 +479,30 @@ static void interact(Ctx *c, uint32_t hero, double now)
     ext_thiscall(c, item ? FX("?RSGet@GoMind@@QAEXPAVGo@@W4eQPlace@@W4eActionOrigin@@@Z") : FX("?RSUse@GoMind@@QAEXPAVGo@@W4eQPlace@@W4eActionOrigin@@@Z"), mind, 3, b);
     LOG("%s %08x\n", item ? "get" : "use", best);
 }
+/* gold and potions on the ground near the hero you play are picked up when it stands idle with no enemy close, as in
+ * Diablo (everything else stays for you, or Z to collect all loot) */
+static void pick_up_gold(Ctx *c, uint32_t hero, double now)
+{
+    static double last; if (now - last < 0.5 || steering || now - last_order < 0.6) return; last = now;
+    uint32_t mind = GO_MIND(hero), aiq = SINGLETON("AIQuery"); if (!mind || !aiq) return;
+    if (ext_thiscall(c, FX("?AmBusy@GoMind@@QBE_NXZ"), mind, 0, 0) & 0xff) return;
+    Foe f[1]; if (foes(c, hero, 12.0f, f, 1)) return;
+    uint32_t coll = ext_thiscall(c, FX("?GetTempGopColl2@AIQuery@@QAEAAUGopColl@@XZ"), aiq, 0, 0);
+    ext_thiscall(c, FX("?Clear@GopColl@@AAEXXZ"), coll, 0, 0);
+    uint32_t a[2] = {fbits(5.0f), coll}; ext_thiscall(c, FX("?GetOccupantsInSphere@GoMind@@QBE_NMAAUGopColl@@@Z"), mind, 2, a);
+    int k = (int)ext_thiscall(c, FX("?Size@GopColl@@ABEHXZ"), coll, 0, 0); uint32_t best = 0;
+    for (int i = 0; i < k && !best; i++) {
+        uint32_t j = (uint32_t)i, g = ext_thiscall(c, FX("?Get@GopColl@@ABEPAVGo@@H@Z"), coll, 1, &j); if (!g) continue;
+        if (!(ext_thiscall(c, FX("?IsItem@Go@@QBE_NXZ"), g, 0, 0) & 0xff)) continue;
+        if (ext_thiscall(c, FX("?GetParent@Go@@QBEPAV1@XZ"), g, 0, 0)) continue;                  /* carried by someone */
+        if ((ext_thiscall(c, FX("?IsGold@Go@@QBE_NXZ"), g, 0, 0) & 0xff) || (ext_thiscall(c, FX("?IsPotion@Go@@QBE_NXZ"), g, 0, 0) & 0xff)) best = g;
+    }
+    ext_thiscall(c, FX("?Clear@GopColl@@AAEXXZ"), coll, 0, 0);
+    if (!best) return;
+    uint32_t b[3] = {best, enum_val(c, "eQPlace", "qp_clear", 0), enum_val(c, "eActionOrigin", "ao_human", 0)};
+    ext_thiscall(c, FX("?RSGet@GoMind@@QAEXPAVGo@@W4eQPlace@@W4eActionOrigin@@@Z"), mind, 3, b);
+    LOG("picking up %08x\n", best);
+}
 static int slot_request[ACTION_SLOTS];                               /* from the keyboard (binder) */
 static int interact_request;
 static const char *slot_key(int slot) { static const char *const k[ACTION_SLOTS] = {"Space", "1", "2", "3", "4", ""}; return k[slot]; }
@@ -536,6 +560,23 @@ static void hero_name(Ctx *c, uint32_t go, char *out, size_t cap)
     if (!*out) snprintf(out, cap, "%s", GS(ext_thiscall(c, FX("?GetTemplateName@Go@@QBEPBDXZ"), go, 0, 0)));
 }
 
+/* test mode: DS_ACTION_TESTPARTY=gyorn,ulora clones those characters next to the hero and has them join the party */
+static void test_party(Ctx *c, uint32_t hero)
+{
+    const char *e = getenv("DS_ACTION_TESTPARTY"); if (!e || !getenv("DS_TEST") || !hero) return;
+    char list[256]; snprintf(list, sizeof list, "%s", e);
+    uint32_t server = SINGLETON("Server"), party = server ? ext_thiscall(c, FX("?GetScreenParty@Server@@QAEPAVGo@@XZ"), server, 0, 0) : 0;
+    uint32_t gp = party ? go_comp(party, "?GetParty@Go@@QAEPAVGoParty@@XZ") : 0, godb = SINGLETON("GoDb"); if (!gp || !godb) return;
+    for (char *save, *t = strtok_r(list, ",", &save); t; t = strtok_r(0, ",", &save)) {
+        uint32_t a[1] = {gstr_perm(t)}, req = w32_callback(c, FX("?MakeGoCloneReq@@YAAAUGoCloneReq@@PBD@Z"), 1, a), pos = go_pos(c, hero);
+        ext_thiscall(c, FX("?SetStartingPos@GoCloneReq@@QAEXABUSiegePos@@@Z"), req, 1, &pos);
+        uint32_t goid = ext_thiscall(c, FX("?SCloneGo@GoDb@@QAEPBUGoid_@@ABUGoCloneReq@@@Z"), godb, 1, &req);
+        uint32_t go = goid ? ext_thiscall(c, FX("?GetGo@Goid_@@ABEPAVGo@@XZ"), goid, 0, 0) : 0;
+        if (go) ext_thiscall(c, FX("?RSAddMemberNow@GoParty@@QAEXPAVGo@@@Z"), gp, 1, &go);
+        LOG("test party: %s -> %08x\n", t, go);
+    }
+}
+
 /* ---------------------------------------------------------------- per frame */
 static void frame(Ctx *c)
 {
@@ -548,6 +589,7 @@ static void frame(Ctx *c)
     uint32_t want = pick_controlled(c, m, n);
     if (once == 2) { once = 3; LOG("picked %08x\n", want); }
     if (want != controlled) { take_control(c, want); memset(guarding, 0, sizeof guarding); }
+    static int tested; if (!tested && controlled) { tested = 1; test_party(c, controlled); }
     if (logging()) {                                                  /* where the hero is, once a second */
         static double t; if (now - t > 1.0 && controlled) { t = now; uint32_t p = go_pos(c, controlled); V3 w = world(c, p), f = {0, 0, 0}; camera_forward(c, &f);
             LOG("hero at %.2f %.2f %.2f, camera forward %.2f %.2f\n", w.x, w.y, w.z, f.x, f.z); }
@@ -561,6 +603,7 @@ static void frame(Ctx *c)
         static const uint32_t pad_slot[ACTION_SLOTS] = {PAD_B, PAD_X, PAD_Y, PAD_RB, PAD_RT, 0};
         for (int i = 0; i < ACTION_SLOTS; i++) if ((pressed & pad_slot[i]) || slot_request[i]) { slot_request[i] = 0; if (controlled) use_slot(c, controlled, i, now); }
         if ((pressed & PAD_A) || interact_request) { interact_request = 0; if (controlled) interact(c, controlled, now); }
+        if (controlled && w32_callback(c, 0x51ed95u, 0, 0) & 0xff) pick_up_gold(c, controlled, now);
     } else memset(slot_request, 0, sizeof slot_request);
     companions(c, m, n, now);
     if (controlled) hud_fill(c, controlled, now);
@@ -591,6 +634,14 @@ int action_override(Ctx *c, uint32_t addr)
             steer_key_seen[vk] = now_s();
         }
         c->eax = 1; c->esp += 4 + 4; return 1;        /* handled: the game's own commands on these keys don't run */
+    }
+    case 0x5d281f: {                                  /* GoMind::SDoJob(const JobReq&) (ecx: the mind) */
+        uint32_t eax = c->eax, ecx = c->ecx, edx = c->edx, top = c->top;
+        int drop = unasked_job(c, ecx, ARG(0));
+        c->eax = eax; c->ecx = ecx; c->edx = edx; c->top = top;
+        if (!drop) return 0;
+        { static double t; double n = now_s(); if (n - t > 2) { t = n; LOG("turned down job %u for the hero you play\n", rt_r32(G_MEM, ARG(0))); } }
+        c->eax = 0; c->esp += 4 + 4; return 1;        /* no job */
     }
     case 0x57470d: {                                  /* WorldTime::Update: once a frame on the game's thread */
         uint32_t eax = c->eax, ecx = c->ecx, edx = c->edx, top = c->top;   /* the caller's registers: `this` is in ecx */

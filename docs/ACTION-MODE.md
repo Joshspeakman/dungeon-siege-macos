@@ -35,10 +35,16 @@ save, Ctrl+1-0 to store weapon sets); weapon sets 5-0 are still recalled with th
 
 ## The party
 
-You play the **selected** hero (with several selected, the first one). It no longer runs after enemies on its own
-(its movement orders are set to Hold Ground while you play it, and given back when you switch). Every other party
-member gets the game's **Guard** order on you: they follow you and fight what attacks you. Select another hero (a
-portrait, `,` `.`, or the D-pad) and you play that one instead; the others guard the new hero.
+You play the **selected** hero (with several selected, the first one; as soon as you start walking, only that one).
+It acts only on your orders: the engine's own jobs for it that would walk it somewhere or start a fight on its own
+(chasing an enemy it saw, picking a target) are turned down, so nothing happens unless you do it. Its other jobs go
+on as usual (it still drinks potions, gets up, dies), and nothing about the hero itself changes, so saves are the same
+as in Classic. Every other party member gets the game's **Guard** order on you: they follow you and fight what attacks
+you, with their own AI. Select another hero (a portrait, `,` `.`, or the D-pad) and you play that one instead; the
+others guard the new hero.
+
+Gold and potions lying within a few metres are picked up when your hero stands idle with no enemy near (other loot
+stays where it is: Z collects all of it, as in the original).
 
 ## Abilities
 
@@ -70,17 +76,21 @@ digests are unchanged.
   `SiegeEngine::AdjustPointToTerrain` (nearer points are tried where there is no ground).
 - **Keys.** The game's in-game input binder hands Action Mode W A S D, Space, 1-4 and P first (only while the game's
   keys are live: never while typing in the chat box).
-- **Once a frame** (at `WorldTime::Update`): pick the hero, steer, use abilities, keep the party guarding, fill the
-  overlay's numbers.
+- **Once a frame** (at `WorldTime::Update`): pick the hero, steer, use abilities, keep the party guarding, pick up gold,
+  fill the overlay's numbers.
+- **Only your orders.** `GoMind::SDoJob` is asked first: for the hero you play, a move, follow, patrol, flee, guard or
+  attack job that does not come from you (`ao_human`) is turned down.
 
 ## Testing
 
 Test mode (`DS_TEST=1`) commands for a scripted controller: `stick:x,y` (left stick in percent, held until the next
 one) and `pad:bits,frames` (buttons as `PAD_*` bits of `runtime/win32/w32.h`). `hudshot:<png>` saves the overlay.
-`DS_ACTIONLOG=1` logs every order, hit and ability. `DS_ACTION_FLIPX=1` mirrors left and right of the steering.
+`DS_ACTIONLOG=1` logs every order, hit, ability and message. `DS_ACTION_TESTPARTY=gyorn,ulora` (test mode) clones
+those characters next to the hero and adds them to the party, for trying the party with a solo save. `DS_ACTION_FLIPX=1` mirrors left and right of the steering.
 
 ## Not yet
 
-- Multiplayer: Action Mode is for single player for now. In a hosted game it steers the host's hero only; a joining
-  player's moves go through the host (about 0.2 s), so steering would feel late.
+- Multiplayer: Action Mode is made for single player. Hosting works (your hero, your party); a joining player can
+  steer, but its moves go through the host (about 0.2 s) and its abilities are off (their damage is the host's to
+  deal).
 - The abilities have no new animations of their own: the hero swings or shoots its normal attack at the first target.
