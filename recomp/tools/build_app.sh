@@ -9,6 +9,6 @@ clang -c -O2 -fobjc-arc -Wall -Wno-unused-function -I "$HERE/runtime" -DDS_BUILD
 clang -c -O2 -fobjc-arc -Wall -Wno-unused-function -o "$OUT/obj/host/renderer.o" "$ROOT/src/renderer/renderer.m"
 clang -c -O2 -fobjc-arc -Wall -Wno-unused-function -o "$OUT/obj/host/launcher.o" "$HERE/host/launcher.m"
 clang -o "$APP/DungeonSiegeNative" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/host/*.o \
-  -framework AppKit -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -lz
+  -framework AppKit -framework GameController -framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -lz
 cp "$ROOT/src/renderer/shaders.metal" "$ROOT/src/dsr/dsr_snapshot.bin" "$APP/"
 echo "$APP/DungeonSiegeNative"
