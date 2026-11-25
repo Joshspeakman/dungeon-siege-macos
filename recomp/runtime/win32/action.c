@@ -137,6 +137,10 @@ static int stolen_key(uint32_t vk) { return vk == 'W' || vk == 'A' || vk == 'S' 
 /* ---------------------------------------------------------------- the controlled hero and the party */
 static uint32_t controlled, controlled_mind; /* the hero being steered (Go) and its GoMind */
 static int steering;                        /* a direction was held last frame */
+static Ctx *aim_ctx;                        /* the game thread's context while a frame runs (for aim) */
+static double last_order; static float last_dx, last_dz;
+static uint32_t leg; static float last_ix, last_iy;         /* the leg being walked (guest SiegePos) and the input that asked for it */
+static double attack_ordered; static float attack_ix, attack_iy;   /* an attack you ordered, and the input held then */
 static int companions_now;                  /* guard orders due at once (the hero just started walking) */
 static uint32_t guarding[16];               /* party member -> the hero it was told to guard */
 
@@ -170,6 +174,12 @@ static int unasked_job(Ctx *c, uint32_t mind, uint32_t req)
     if (!controlled_mind || !req || mind != controlled_mind) return 0;
     uint32_t origin = rt_r32(G_MEM, req + 0xc);                       /* JobReq {jat, jq, qp, origin, ...} */
     if (verbose()) LOG("job %u (origin %u) for the hero you play\n", rt_r32(G_MEM, req), origin);
+    if (origin == enum_val(c, "eActionOrigin", "ao_human", 1)) {      /* yours: an attack holds the steering off (steer) */
+        uint32_t jat = rt_r32(G_MEM, req);
+        if (jat >= enum_val(c, "eJobAbstractType", "jat_attack_object", 2) && jat <= enum_val(c, "eJobAbstractType", "jat_attack_position_ranged", 7)) {
+            attack_ordered = now_s(); attack_ix = last_ix; attack_iy = last_iy;
+        }
+    }
     if (origin != enum_val(c, "eActionOrigin", "ao_reflex", 0xfffffffeu)) return 0;   /* only what its own brain decides */
     static const char *const walks[] = {"jat_move", "jat_follow", "jat_patrol", "jat_flee_from_object", "jat_guard"};
     static const char *const attacks[] = {"jat_attack_object", "jat_attack_object_melee", "jat_attack_object_ranged", "jat_attack_position",
@@ -209,9 +219,6 @@ static void companions(Ctx *c, uint32_t *m, int n, double now)
 }
 
 /* ---------------------------------------------------------------- steering */
-static Ctx *aim_ctx;                        /* the game thread's context while a frame runs (for aim) */
-static double last_order; static float last_dx, last_dz;
-static uint32_t leg; static float last_ix, last_iy;         /* the leg being walked (guest SiegePos) and the input that asked for it */
 static int place_ahead(Ctx *c, uint32_t hero, V3 dir, float dist, uint32_t out)
 {
     uint32_t hp = go_pos(c, hero); if (!hp) return 0;
@@ -256,6 +263,12 @@ static void steer(Ctx *c, double now)
     /* One leg of 4.5 m at a time, so the walk isn't interrupted: a new one when the direction asked for changes (in
      * input space: the world frame turns with the camera's node), when the leg is nearly walked, or every half second */
     if (!leg) leg = heap_alloc(w32_process_heap, 8, 16);
+    if (steering && now - attack_ordered < 8) {                      /* an attack you ordered while walking: let it play */
+        uint32_t jat = ext_thiscall(c, FX("?GetFrontActionJat@GoMind@@QBE?AW4eJobAbstractType@@XZ"), mind, 0, 0);
+        int attacking = jat >= enum_val(c, "eJobAbstractType", "jat_attack_object", 2) && jat <= enum_val(c, "eJobAbstractType", "jat_attack_position_ranged", 7);
+        if (attacking && x * attack_ix + y * attack_iy > 0.82f) return;   /* until you let go or turn away (about 35 degrees) */
+        if (!attacking) attack_ordered = 0;
+    }
     if (steering) {
         uint32_t hp = go_pos(c, hero), a[2] = {leg, hp};
         float left = hp ? (float)ext_call_f(c, 0x678deau, 2, a) : 0;          /* GetSiegeDistance */
@@ -437,6 +450,8 @@ static int use_slot(Ctx *c, uint32_t hero, int slot, double now)
             uint32_t a[3] = {tgt, enum_val(c, "eQPlace", "qp_clear", 0), enum_val(c, "eActionOrigin", "ao_human", 0)};
             ext_thiscall(c, FX("?RSMove@GoMind@@QAEXABUSiegePos@@W4eQPlace@@W4eActionOrigin@@@Z"), mind, 3, a);
             untouchable_goid = GO_GOID(hero); untouchable_until = now + 0.6;
+            if (!leg) leg = heap_alloc(w32_process_heap, 8, 16);
+            memcpy(GP(leg), GP(tgt), 16);                            /* abilities right after aim the way it went */
             effect(c, "dust_explosion_small", hero, hero);
             last_order = now; used = 1;
         }
@@ -612,10 +627,11 @@ static void pace(Ctx *c, uint32_t hero, double now)
         for (int j = 0; j < nm && !counted; j++) {                   /* or it has a copy in it (no content id): grown before a reload */
             uint32_t g = ext_thiscall(c, FX("?GetGo@Goid_@@ABEPAVGo@@XZ"), members[j], 0, 0), scid = g ? ext_thiscall(c, FX("?GetScid@Go@@QBEPBUScid_@@XZ"), g, 0, 0) : 1;
             if (verbose()) LOG("pack member %08x scid %08x\n", members[j], scid);
-            if (!scid || scid == 0xffffffffu) counted = 1;
+            if (!scid || scid >= 0xfffffff0u) counted = 1;              /* copies read 0xfffffffe (made at run time) */
         }
         for (int j = 0; j < nm; j++) mark_packed(members[j]);
-        if (counted || same < 2 || n > 24 || rand() % 2) continue;
+        static int always = -1; if (always < 0) always = getenv("DS_TEST") && getenv("DS_ACTION_PACKTEST");   /* test mode: every group */
+        if (counted || same < 2 || n > 24 || (!always && rand() % 2)) continue;
         char tcopy[96]; snprintf(tcopy, sizeof tcopy, "%s", tn);
         uint32_t esp = c->esp, pos = go_pos(c, f[i].go); uint8_t p16[16]; memcpy(p16, GP(pos), 16); c->esp = esp;
         uint32_t g = spawn(c, tcopy, p16, 1.3f, -1.1f); if (g) mark_packed(g);
@@ -703,7 +719,7 @@ static void test_party(Ctx *c, uint32_t hero)
 /* the world was left or is being reloaded: every Go pointer from it is gone */
 static void forget_world(void)
 {
-    controlled = controlled_mind = 0; steering = 0; untouchable_goid = 0; memset(guarding, 0, sizeof guarding);
+    controlled = controlled_mind = 0; steering = 0; untouchable_goid = 0; last_order = 0; attack_ordered = 0; memset(guarding, 0, sizeof guarding);
     memset(slot_request, 0, sizeof slot_request); interact_request = 0; nwatched = 0; npacked = 0; memset(pickup_failed, 0, sizeof pickup_failed);
 }
 /* DS_ACTIONLOG=2: how evenly the hero walks while steered (per-frame distance, GetSiegeDistance), summed up at each stop */
@@ -745,7 +761,9 @@ static void frame(Ctx *c)
     uint32_t ws = rt_r32(G_MEM, rt_r32(G_MEM, 0x7a05c0u) + 0x20);
     if (!(w32_callback(c, FX("?IsInGame@@YA_NW4eWorldState@@@Z"), 1, &ws) & 0xff)) { forget_world(); if (action_hud.in_game) { action_hud.in_game = 0; action_hud.seq++; } return; }
     double now = now_s(); aim_ctx = c;
-    if (ws == 27) { if (steering) steering = 0; return; }             /* ws_sp_nis: a cutscene plays: nothing of ours */
+    if (ws == 27) {                                                   /* ws_sp_nis: a cutscene plays: nothing of ours, no overlay */
+        steering = 0; if (action_hud.in_game) { action_hud.in_game = 0; action_hud.seq++; } return;
+    }
     static int once; if (!once) { once = 1; LOG("in game (world state %u)\n", ws); }
     uint32_t m[16]; int n = party_members(c, m, 16); if (!n) return;
     if (once == 1) { once = 2; LOG("party of %d\n", n); }
@@ -823,7 +841,12 @@ int action_override(Ctx *c, uint32_t addr)
     }
     case 0x57470d: {                                  /* WorldTime::Update: once a frame on the game's thread */
         uint32_t eax = c->eax, ecx = c->ecx, edx = c->edx, top = c->top;   /* the caller's registers: `this` is in ecx */
+        double t0 = verbose() ? now_s() : 0;
         frame(c); c->eax = eax; c->ecx = ecx; c->edx = edx; c->top = top;
+        if (verbose()) {                                              /* DS_ACTIONLOG=2: what Action Mode costs a frame */
+            static double sum, worst, since; static int n; double t = now_s() - t0; sum += t; n++; if (t > worst) worst = t;
+            if (!since) since = t0; if (t0 - since > 10) { LOG("cost: %.3f ms a frame on average, %.2f ms at most (%d frames)\n", sum / n * 1000, worst * 1000, n); sum = worst = 0; n = 0; since = t0; }
+        }
         return 0;
     }
     }
