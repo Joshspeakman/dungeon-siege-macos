@@ -368,6 +368,18 @@ static NSArray<NSDictionary *> *notch_choices(void)
              @{@"value": @"around", @"label": @"Around the Notch", @"note": @"The picture on the whole display, the notch over its top"}];
 }
 static void apply_notch(NSString *v) { setenv("DS_NOTCH", v.UTF8String, 1); }
+/* Play Style: Action Mode (runtime/win32/action.c: steer with W A S D or a controller, abilities, the party guards the
+ * hero you play) or the original point-and-click game (DS_ACTION) */
+static NSArray<NSDictionary *> *style_choices(void)
+{
+    return @[@{@"value": @"action", @"label": @"Action", @"note": @"W A S D or a controller to move, abilities on Space and 1-4"},
+             @{@"value": @"classic", @"label": @"Classic", @"note": @"The original point-and-click game"}];
+}
+static NSInteger default_style_index(void)   /* Action in the Action Mode app, Classic everywhere else */
+{
+    const char *b = getenv("DS_UPDATE_BRANCH"); return b && !strcmp(b, "action-mode") ? 0 : 1;
+}
+static void apply_style(NSString *v) { setenv("DS_ACTION", [v isEqualToString:@"action"] ? "1" : "0", 1); }
 /* Interface Size: the game runs at the chosen resolution divided by this, so its interface is laid out that much
  * larger, and the renderer draws the screen at the chosen resolution itself (DSR_RENDER_SCALE), so the world stays sharp.
  * Only sizes that leave the game at least 800x600 (what its interface is laid out for) are offered. */
@@ -945,6 +957,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     shd.title = @"Shadow Detail"; shd.choices = shadow_detail_choices(); shd.index = index_of(shd.choices, saved[@"shadowDetail"], 2);
     she.title = @"Shadow Edges"; she.choices = shadow_edge_choices(); she.index = index_of(she.choices, saved[@"shadowEdges"], 1);
     mode.title = @"Game"; mode.choices = mode_choices(data); mode.index = index_of(mode.choices, saved[@"mode"], 0);
+    DSRow *style = [DSRow new]; style.title = @"Play Style"; style.choices = style_choices(); style.index = index_of(style.choices, saved[@"playStyle"], default_style_index());
     /* the game's own graphics options, from the chosen game's prefs.gas (Legends of Aranna keeps its own) */
     DSRow *gsh = [DSRow new], *flt = [DSRow new], *det = [DSRow new], *gam = [DSRow new];
     gsh.title = @"Shadows"; flt.title = @"Texture Filtering"; det.title = @"Object Detail"; gam.title = @"Gamma";
@@ -1007,6 +1020,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
         if (saved.count) { apply(res.choices[res.index][@"value"], dist.choices[dist.index][@"value"], fps.choices[fps.index][@"value"], mode.choices[mode.index][@"value"], data, modFiles());
                            apply_shadows(shd.choices[shd.index][@"value"], she.choices[she.index][@"value"]); apply_notch(notch.choices[notch.index][@"value"]);
                            apply_ui(res.choices[res.index][@"value"], ui.choices[ui.index][@"value"]); }
+        if (!getenv("DS_ACTION")) apply_style(style.choices[style.index][@"value"]);
         return 1;
     }
 
@@ -1026,7 +1040,7 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     modsSec.title = @"Mods"; modsSec.summary = ^NSString * { return mods.choices[mods.index][@"label"]; };
     updSec.title = @"Updates"; updSec.summary = ^NSString * { NSDictionary *c = upd.choices[upd.index]; return [c[@"note"] length] ? [NSString stringWithFormat:@"%@ · %@", c[@"label"], c[@"note"]] : c[@"label"]; };
     DSLaunchView *v = [[DSLaunchView alloc] initWithFrame:NSMakeRect(0, 0, 780, 760)];
-    v.top = @[mode]; v.sections = @[display, graphics, audio, modsSec, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
+    v.top = @[mode, style]; v.sections = @[display, graphics, audio, modsSec, updSec]; v.open = -1; v.hover = v.pressed = HIT_NONE;
     __weak DSLaunchView *wv = v; __weak DSRow *wu = upd;
     void (^check)(void) = ^{
         if (!updater) return;
@@ -1130,9 +1144,10 @@ int ds_launcher_run(const char *game_dir, const char *data_dir)
     NSString *sdv = shd.choices[shd.index][@"value"], *sev = she.choices[she.index][@"value"];
     prefsKeep(prefsLoa); prefsSave();
     NSString *nv = notch.choices[notch.index][@"value"], *uv = ui.choices[ui.index][@"value"];
-    [@{@"interfaceSize": uv, @"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev, @"notch": nv,
+    NSString *stv = style.choices[style.index][@"value"];
+    [@{@"playStyle": stv, @"interfaceSize": uv, @"resolution": rv, @"viewDistance": dv, @"frameRate": fv, @"mode": mv, @"shadowDetail": sdv, @"shadowEdges": sev, @"notch": nv,
        mods_key(NO): onBase.allObjects, mods_key(YES): onLoa.allObjects,
        [mods_key(NO) stringByAppendingString:@"Seen"]: seenBase, [mods_key(YES) stringByAppendingString:@"Seen"]: seenLoa, @"modsWarned": warned} writeToFile:plistPath atomically:YES];
-    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev); apply_notch(nv); apply_ui(rv, uv);
+    apply(rv, dv, fv, mv, data, modFiles()); apply_shadows(sdv, sev); apply_notch(nv); apply_ui(rv, uv); apply_style(stv);
     return 1;
 }

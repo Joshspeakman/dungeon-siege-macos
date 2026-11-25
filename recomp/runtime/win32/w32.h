@@ -39,6 +39,23 @@ void     w32_exit(Ctx *c, uint32_t code) __attribute__((noreturn));
 extern volatile int w32_exited;
 extern uint32_t w32_exit_code;
 
+/* Action Mode (runtime/win32/action.c): the controller state the host writes, and what the host's overlay shows */
+enum { PAD_A = 1, PAD_B = 2, PAD_X = 4, PAD_Y = 8, PAD_LB = 0x10, PAD_RB = 0x20, PAD_UP = 0x40, PAD_DOWN = 0x80, PAD_LEFT = 0x100,
+       PAD_RIGHT = 0x200, PAD_MENU = 0x400, PAD_VIEW = 0x800, PAD_LS = 0x1000, PAD_RS = 0x2000, PAD_LT = 0x4000, PAD_RT = 0x8000 };
+typedef struct { float lx, ly, rx, ry, lt, rt; uint32_t buttons; int connected; } ActionPad;   /* sticks -1..1, y up */
+#define ACTION_SLOTS 6
+typedef struct {
+    int in_game, menu_open;                        /* in the world; a game window (inventory, options...) is open */
+    char hero[40]; float life, life_max, mana, mana_max;
+    struct { char name[28], key[12]; float cooldown, cost; int ready; } slot[ACTION_SLOTS];
+    char toast[120]; double toast_until;           /* a short message in the middle of the screen (CLOCK_MONOTONIC s) */
+    uint32_t seq;                                  /* bumped on every change */
+} ActionHud;
+extern volatile ActionPad action_pad;
+extern volatile ActionHud action_hud;
+int action_on(void);
+extern uint8_t w32_keys[256];
+
 /* virtual memory (guest) */
 uint32_t vm_alloc(uint32_t addr, uint32_t size, uint32_t type, uint32_t prot);
 int      vm_free(uint32_t addr, uint32_t size, uint32_t type);

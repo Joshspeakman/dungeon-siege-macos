@@ -41,13 +41,13 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GAME=""; GOG_EXE=""; YH=""; LOA=""; MODS=""; BENCH=""; NODL="${DS_NO_DOWNLOADS:-}"; COL=""; SAVECOL=""; APPS="$HOME/Applications"; DATA="$HOME/Games/DungeonSiegeNative"
-NIGHTLY=""; AS_NIGHTLY=""; STEAM=""; ARGS=()
+NIGHTLY=""; AS_NIGHTLY=""; AS_ACTION=""; STEAM=""; ARGS=()
 STEAM_SHA=c408ef77b39484d8ad82ba17859cf1e60b24d3baf6d429283a52b886d67f33ab
 STEAM_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_39190/depot_39191"
 IN_PLACE=""
 while [ $# -gt 0 ]; do
   case "$1" in --in-place) IN_PLACE=1; ARGS+=("$1"); shift; continue;; esac
-  case "$1" in --nightly) NIGHTLY=1; shift; continue;; --as-nightly) AS_NIGHTLY=1; shift; continue;; esac
+  case "$1" in --nightly) NIGHTLY=1; shift; continue;; --as-nightly) AS_NIGHTLY=1; shift; continue;; --as-action) AS_ACTION=1; shift; continue;; esac
   ARGS+=("$1"); [ $# -gt 1 ] && case "$1" in --*) case "$2" in --*) ;; *) ARGS+=("$2");; esac;; esac
   if [ "$1" = --steam ]; then if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then STEAM="$2"; shift 2; else STEAM="$STEAM_DEPOT"; shift; fi; continue; fi
   case "$1" in
@@ -60,6 +60,8 @@ done
 # the stable app, or (--as-nightly, used by --nightly) the nightly one next to it
 APP_NAME="Dungeon Siege Native"; APP_SHOWN="Dungeon Siege"; APP_ID=native; APP_LOG=DungeonSiegeNative
 [ -n "$AS_NIGHTLY" ] && { APP_NAME="Dungeon Siege Nightly"; APP_SHOWN="Dungeon Siege Nightly"; APP_ID=nightly; APP_LOG=DungeonSiegeNightly; }
+# --as-action: the Action Mode development app (branch action-mode, docs/ACTION-MODE-PLAN.md), built from this checkout
+[ -n "$AS_ACTION" ] && { APP_NAME="Dungeon Siege Action"; APP_SHOWN="Dungeon Siege Action"; APP_ID=action; APP_LOG=DungeonSiegeAction; }
 # the game folder an installed app uses (for reinstalls and updates without options)
 installed_game() {     # the game folder an installed app was set up with
   local a L v x; for a in "Dungeon Siege Native" "Dungeon Siege Nightly"; do
@@ -265,7 +267,7 @@ Q_APPS=$(printf '%q' "$APPS")
 Q_GAME=$(printf '%q' "$GAME"); Q_DATA=$(printf '%q' "$DATA")      # shell-quoted: any folder name is only data
 # updates from the launcher: the branch this app follows (main, or nightly for Nightly), the commit it was built from and
 # the checkout it was installed from; its updater fetches the branch into a worktree there and rebuilds the app from it
-U_BRANCH=main; U_DIR=stable; [ -n "$AS_NIGHTLY" ] && { U_BRANCH=nightly; U_DIR=nightly; }
+U_BRANCH=main; U_DIR=stable; [ -n "$AS_NIGHTLY" ] && { U_BRANCH=nightly; U_DIR=nightly; }; [ -n "$AS_ACTION" ] && { U_BRANCH=action-mode; U_DIR=action; }
 U_REPO="$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"; U_REPO="${U_REPO%/.git}"
 U_BUILT="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
 if [ -n "$U_REPO" ] && [ -n "$U_BUILT" ] && git -C "$U_REPO" remote get-url origin >/dev/null 2>&1; then
@@ -284,7 +286,7 @@ if [ -e "\$W/.git" ]; then git -C "\$W" checkout -q -f --detach "origin/\$BRANCH
 else mkdir -p "\$REPO/build"; git -C "\$REPO" worktree add -q -f --detach "\$W" "origin/\$BRANCH"; fi
 echo "== \$BRANCH: \$(git -C "\$W" log -1 --format='%h %s')"
 [ -e "\$W/recomp/.venv" ] || [ ! -d "\$REPO/recomp/.venv" ] || ln -s "\$REPO/recomp/.venv" "\$W/recomp/.venv"   # share the tools
-exec "\$W/install.sh" --game-dir $Q_GAME --data-dir $Q_DATA --app-dir $Q_APPS $( [ -n "$IN_PLACE" ] && echo "--in-place" )$( [ -n "$AS_NIGHTLY" ] && echo " --as-nightly" )
+exec "\$W/install.sh" --game-dir $Q_GAME --data-dir $Q_DATA --app-dir $Q_APPS $( [ -n "$IN_PLACE" ] && echo "--in-place" )$( [ -n "$AS_NIGHTLY" ] && echo " --as-nightly" )$( [ -n "$AS_ACTION" ] && echo " --as-action" )
 UPDATE
   chmod +x "$A/Contents/MacOS/update"
 fi
@@ -330,8 +332,9 @@ PLIST
 I="$(mktemp -d)"
 if python3 "$HERE/recomp/tools/extract_icon.py" "$EXE" "$I/ds.ico" 2>/dev/null && sips -s format png "$I/ds.ico" --out "$I/ds.png" >/dev/null 2>&1; then
   sips -z 512 512 "$I/ds.png" --out "$I/ds512.png" >/dev/null
-  if [ -n "$AS_NIGHTLY" ] && clang -fobjc-arc -framework AppKit "$HERE/recomp/tools/nightly_icon.m" -o "$I/nightly_icon" 2>/dev/null \
-     && "$I/nightly_icon" "$I/ds512.png" "$I/n.png" && sips -z 512 512 "$I/n.png" --out "$I/ds512.png" >/dev/null; then :; fi   # dark tile, NIGHTLY band
+  BAND=""; [ -n "$AS_NIGHTLY" ] && BAND=NIGHTLY; [ -n "$AS_ACTION" ] && BAND=ACTION
+  if [ -n "$BAND" ] && clang -fobjc-arc -framework AppKit "$HERE/recomp/tools/nightly_icon.m" -o "$I/nightly_icon" 2>/dev/null \
+     && "$I/nightly_icon" "$I/ds512.png" "$I/n.png" "$BAND" && sips -z 512 512 "$I/n.png" --out "$I/ds512.png" >/dev/null; then :; fi   # dark tile, NIGHTLY/ACTION band
   sips -s format icns "$I/ds512.png" --out "$A/Contents/Resources/icon.icns" >/dev/null 2>&1 || true
 fi
 rm -rf "$I"

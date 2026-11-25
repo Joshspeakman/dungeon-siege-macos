@@ -125,6 +125,8 @@ static void *render_thread(void *arg)
 // path as real input. Coordinates are in the game's current display mode.
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[512]; } Act;   // at > 0: seconds from start
 static Act acts[256]; static int nacts;
+static void hud_shot(NSView *v, const char *path);   /* ds_hud.h */
+static float test_lx, test_ly; static uint32_t test_pad_buttons; static int test_pad_frames;   /* Action Mode test controller (ds_pad.h) */
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
@@ -139,7 +141,7 @@ static void parse_script(void)
         if (tok[0] == '@') a->frame = 0xffffffffu;
         if (ok >= 2) {
             snprintf(a->kind, sizeof a->kind, "%s", kind);
-            if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+            if (!strcmp(kind, "shot") || !strcmp(kind, "hudshot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
             nacts++;
         }
         tok = strtok_r(0, ";", &save);
@@ -180,7 +182,7 @@ static void cmdfile_poll(uint32_t fno)
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         if (sscanf(line, "%7[a-z]:%599[^\n]", kind, rest) < 1 || !kind[0]) continue;
         memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
-        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+        if (!strcmp(kind, "shot") || !strcmp(kind, "hudshot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
         nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
     }
     fclose(f);
@@ -210,7 +212,10 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
         } else if (!strcmp(a->kind, "hold")) {            /* hold:vk,frames: a key held down (the modifier of a chord) */
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1); }
             if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u); }
-        } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
+        } else if (!strcmp(a->kind, "hudshot") && fno == a->frame) { char *pth = strdup(a->path); dispatch_async(dispatch_get_main_queue(), ^{ hud_shot(win.contentView, pth); free(pth); }); }
+        else if (!strcmp(a->kind, "stick") && fno == a->frame) { test_lx = a->x / 100.0f; test_ly = a->y / 100.0f; }   /* Action Mode: left stick, percent */
+        else if (!strcmp(a->kind, "pad") && fno == a->frame) { test_pad_buttons = (uint32_t)a->x; test_pad_frames = a->y > 0 ? a->y * 4 : 20; }   /* PAD_* bits, frames */
+        else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
         else if (!strcmp(a->kind, "lag") && fno == a->frame) { void dp8_set_lag(int, int); dp8_set_lag(a->x, a->y); fprintf(stderr, "DungeonSiegeNative: lag %d ms, jitter %d ms\n", a->x, a->y); }
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
@@ -359,6 +364,9 @@ static void rel_motion(double gx, double gy)
 }
 @end
 
+#include "ds_pad.h"
+#include "ds_hud.h"
+
 // ---------------------------------------------------------------- window + capture
 static void capture(int on)
 {
@@ -380,6 +388,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
     if (game_hwnd) return;                                            // the game has one top-level window
     game_hwnd = hwnd;
     dispatch_async(dispatch_get_main_queue(), ^{
+        pad_start();                                                  // Action Mode: the controller
         NSRect f = NSScreen.mainScreen.frame;
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
         if (test_mode) { f = NSMakeRect(80, 80, 960, 620); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }
@@ -389,6 +398,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         win.title = @"Dungeon Siege"; win.backgroundColor = NSColor.blackColor; win.acceptsMouseMovedEvents = YES;
         GameView *v = [[GameView alloc] initWithFrame:f]; v.wantsLayer = YES;
         win.contentView = v; [win makeFirstResponder:v];
+        hud_start(v);                                                 // Action Mode: the ability bar
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
         [win setLevel:NSNormalWindowLevel];
     });

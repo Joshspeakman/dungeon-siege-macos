@@ -1,11 +1,11 @@
-// nightly_icon <in.png> <out.png>: the Nightly app's icon (install.sh --nightly): the game's icon on a dark rounded tile
-// with a "NIGHTLY" band, so it is told apart from the stable app at a glance. Build: clang -fobjc-arc -framework AppKit
+// nightly_icon <in.png> <out.png> [LABEL]: the Nightly app's icon (install.sh --nightly): the game's icon on a dark rounded tile
+// with a "NIGHTLY" band (or LABEL: "ACTION" draws a red band for the Action Mode app), so it is told apart from the stable app at a glance. Build: clang -fobjc-arc -framework AppKit
 #import <AppKit/AppKit.h>
 
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 3) { fprintf(stderr, "usage: nightly_icon <in.png> <out.png>\n"); return 2; }
+        if (argc < 3) { fprintf(stderr, "usage: nightly_icon <in.png> <out.png> [LABEL]\n"); return 2; }
         NSImage *src = [[NSImage alloc] initWithContentsOfFile:@(argv[1])];
         if (!src) { fprintf(stderr, "cannot read %s\n", argv[1]); return 1; }
         const CGFloat S = 1024;
@@ -35,14 +35,18 @@ int main(int argc, char **argv)
 
         // the band
         NSRect band = NSMakeRect(100, 100, 824, 185);
-        NSGradient *bandFill = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithSRGBRed:0.36 green:0.20 blue:0.78 alpha:1]
-                                                             endingColor:[NSColor colorWithSRGBRed:0.20 green:0.10 blue:0.52 alpha:1]];
+        NSString *label = argc > 3 ? @(argv[3]) : @"NIGHTLY"; BOOL action = [label isEqualToString:@"ACTION"];
+        NSGradient *bandFill = action
+            ? [[NSGradient alloc] initWithStartingColor:[NSColor colorWithSRGBRed:0.78 green:0.18 blue:0.12 alpha:1]
+                                            endingColor:[NSColor colorWithSRGBRed:0.48 green:0.08 blue:0.06 alpha:1]]
+            : [[NSGradient alloc] initWithStartingColor:[NSColor colorWithSRGBRed:0.36 green:0.20 blue:0.78 alpha:1]
+                                            endingColor:[NSColor colorWithSRGBRed:0.20 green:0.10 blue:0.52 alpha:1]];
         [bandFill drawInRect:band angle:-90];
         NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter;
         NSShadow *ts = [NSShadow new]; ts.shadowColor = [NSColor colorWithWhite:0 alpha:0.6]; ts.shadowOffset = NSMakeSize(0, -3); ts.shadowBlurRadius = 6;
         NSDictionary *attrs = @{NSFontAttributeName: [NSFont systemFontOfSize:104 weight:NSFontWeightHeavy], NSForegroundColorAttributeName: NSColor.whiteColor,
                                 NSParagraphStyleAttributeName: ps, NSKernAttributeName: @8, NSShadowAttributeName: ts};
-        NSString *label = @"NIGHTLY"; NSSize ls = [label sizeWithAttributes:attrs];
+        NSSize ls = [label sizeWithAttributes:attrs];
         [label drawInRect:NSMakeRect(100, NSMidY(band) + 12 - ls.height / 2, 824, ls.height) withAttributes:attrs];   // a little above the rounded corners
         [NSGraphicsContext restoreGraphicsState];
 

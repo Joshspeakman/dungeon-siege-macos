@@ -30,7 +30,7 @@ static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static int fuel_string(Ctx *c, uint32_t h, const char *key, char *out, size_t cap);
 static const char *go_template(Ctx *c, uint32_t go);
 static uint32_t gstr(const char *s);
-static uint32_t gpstr(Ctx *c, const char *text);
+uint32_t gpstr(Ctx *c, const char *text);
 static float bitsf(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 /* scratch memory on the guest stack for out-parameters (released by scratch_end) */
 static uint32_t scratch(Ctx *c, uint32_t n) { c->esp -= (n + 15) & ~15u; return c->esp; }
@@ -291,7 +291,7 @@ static void GoPhysics_GetSimDuration(Ctx *c) { RETF(ext_thiscall_f(c, 0x5ffeccu,
  * the caster's, at chest height (the orb circles the caster). */
 static int map_nodes(uint32_t map, uint32_t *node, int max);
 static int generic_states(uint32_t actor, uint32_t *node, int max);
-static int party_members(Ctx *c, uint32_t *out, int max);
+int party_members(Ctx *c, uint32_t *out, int max);
 static void WorldFx_GetPosition(Ctx *c)
 {
     uint32_t fx = rt_r32(G_MEM, THIS + 4), mgr = fx ? rt_r32(G_MEM, fx + 0x8c) : 0, id = ARG(0), out = ARG(1), owner = 0;
@@ -584,7 +584,7 @@ static void UIGame_SetGameInputBinderActive(Ctx *c) { binder_off_since = (ARG(0)
 static void WorldMap_GetUsingPlayerJournal(Ctx *c) { RET(0, 0); }
 /* a FuBi enum constant by name: the specs FuBi registers form a list (head 0x79cf38, next +0x28) of
  * {name, ..., ToString +0xc, ..., begin +0x1c, end +0x20} */
-static int fubi_enum(Ctx *c, const char *type, const char *name, uint32_t *out)
+int fubi_enum(Ctx *c, const char *type, const char *name, uint32_t *out)
 {
     for (uint32_t sp = rt_r32(G_MEM, 0x79cf38u); sp; sp = rt_r32(G_MEM, sp + 0x28)) {
         uint32_t n = rt_r32(G_MEM, sp); if (!n || strcmp(GS(n), type)) continue;
@@ -736,7 +736,7 @@ static void ui_hide_group(Ctx *c, const char *group)
     scratch_end(c, esp);
 }
 static int is_transformed(Ctx *c, uint32_t go);
-static int party_members(Ctx *c, uint32_t *out, int max);
+int party_members(Ctx *c, uint32_t *out, int max);
 static void restore_transformation(Ctx *c, uint32_t go);
 static struct { int rings, vo; int vo_volume; int loaded; } opt = {1, 1, 85, 0};   /* the expansion's own options (volume 0-127, as the engine's) */
 static void opt_load(void);
@@ -1697,7 +1697,7 @@ void loa_hook(Ctx *c, uint32_t addr)
 /* a gpstring with the given text for passing to the game (read-only): made once per distinct text and kept, so that
  * calls made on every interface change or key press do not allocate */
 static uint32_t fmt_s(void) { static uint32_t f; if (!f) f = gstr("%s"); return f; }
-static uint32_t gpstr(Ctx *c, const char *text)
+uint32_t gpstr(Ctx *c, const char *text)
 {
     static struct { char *text; uint32_t g; } cache[2048]; static int n;
     for (int i = 0; i < n; i++) if (!strcmp(cache[i].text, text)) return cache[i].g;
@@ -1857,7 +1857,7 @@ static void world_map_close(Ctx *c)
  * generic state on the party member naming the controlling spell object, which ends the effect on WE_REQ_DEACTIVATE
  * (the expansion's own buttons do the same). The states are a std::map (MSVC: head node at map+4, nodes
  * {left, parent, right, key gpstring, value}, leaves point at a shared nil node). */
-static int party_members(Ctx *c, uint32_t *out, int max)
+int party_members(Ctx *c, uint32_t *out, int max)
 {
     uint32_t server = w32_callback(c, FX("?FUBI_GetClassSingleton@Server@@CAPAV1@XZ"), 0, 0);
     uint32_t party = server ? ext_thiscall(c, FX("?GetScreenParty@Server@@QAEPAVGo@@XZ"), server, 0, 0) : 0;
