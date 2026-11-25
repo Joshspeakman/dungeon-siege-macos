@@ -373,13 +373,18 @@ static void apply_notch(NSString *v) { setenv("DS_NOTCH", v.UTF8String, 1); }
 static NSArray<NSDictionary *> *style_choices(void)
 {
     return @[@{@"value": @"action", @"label": @"Action", @"note": @"W A S D or a controller to move, abilities on Space and 1-4"},
+             @{@"value": @"action_original", @"label": @"Action, Original Packs", @"note": @"Action, with the monster groups as the game made them"},
              @{@"value": @"classic", @"label": @"Classic", @"note": @"The original point-and-click game"}];
 }
 static NSInteger default_style_index(void)   /* Action in the Action Mode app, Classic everywhere else */
 {
-    const char *b = getenv("DS_UPDATE_BRANCH"); return b && !strcmp(b, "action-mode") ? 0 : 1;
+    const char *b = getenv("DS_UPDATE_BRANCH"); return b && !strcmp(b, "action-mode") ? 0 : 2;
 }
-static void apply_style(NSString *v) { setenv("DS_ACTION", [v isEqualToString:@"action"] ? "1" : "0", 1); }
+static void apply_style(NSString *v)
+{
+    setenv("DS_ACTION", [v hasPrefix:@"action"] ? "1" : "0", 1);
+    setenv("DS_ACTION_PACKS", [v isEqualToString:@"action_original"] ? "0" : "1", 1);   /* bigger monster groups (action.c) */
+}
 /* Interface Size: the game runs at the chosen resolution divided by this, so its interface is laid out that much
  * larger, and the renderer draws the screen at the chosen resolution itself (DSR_RENDER_SCALE), so the world stays sharp.
  * Only sizes that leave the game at least 800x600 (what its interface is laid out for) are offered. */

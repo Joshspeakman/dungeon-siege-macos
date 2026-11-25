@@ -63,7 +63,7 @@ static void hud_update(NSView *v)
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     hud_root.hidden = !show;
     CGSize sz = v.bounds.size; hud_root.frame = v.bounds;
-    double tile = fmin(fmax(sz.height * 0.058, 40), 70), gap = tile * 0.22;
+    double tile = fmin(fmax(sz.height * 0.058, 40), 70), gap = tile * 0.55;
     int n = 0; for (int i = 0; i < ACTION_SLOTS; i++) if (action_hud.slot[i].name[0]) n++;
     double x0 = (sz.width - (n * tile + (n - 1) * gap)) / 2, y0 = tile * 0.6;
     int changed = seq != action_hud.seq || was_pad != pad || !CGSizeEqualToSize(was_size, sz);
@@ -83,8 +83,8 @@ static void hud_update(NSView *v)
             char key[16]; if (pad) snprintf(key, sizeof key, "%s", pad_keys[i]); else { memcpy(key, (const void *)s->key, sizeof s->key); key[sizeof s->key - 1] = 0; }
             hud_key[i].string = @(key); hud_key[i].fontSize = tile * 0.22;               // under the tile
             hud_key[i].frame = CGRectMake(-tile * 0.25, -tile * 0.34, tile * 1.5, tile * 0.3);
-            hud_name[i].string = @(nm); hud_name[i].fontSize = tile * 0.2;
-            hud_name[i].frame = CGRectMake(-tile * 0.5, tile + 2, tile * 2, tile * 0.28);
+            hud_name[i].string = @(nm); hud_name[i].fontSize = tile * 0.19;              // above the tile, within its share
+            hud_name[i].frame = CGRectMake(-gap / 2, tile + 2, tile + gap, tile * 0.28);
         }
     }
     // the message: shown while it is current, fading over its last half second

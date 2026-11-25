@@ -308,6 +308,9 @@ static void effect(Ctx *c, const char *name, uint32_t target, uint32_t source)
 }
 static int weapon_kind(Ctx *c, uint32_t hero)
 {
+    static int forced = -2; if (forced == -2) { const char *e = getenv("DS_TEST") ? getenv("DS_ACTION_TESTKIND") : 0;   /* test mode: melee/ranged/magic */
+        forced = !e ? -1 : !strcmp(e, "magic") ? K_MAGIC : !strcmp(e, "ranged") ? K_RANGED : K_MELEE; }
+    if (forced >= 0) return forced;
     uint32_t inv = GO_INVENTORY(hero); if (!inv) return K_MELEE;
     if (ext_thiscall(c, FX("?IsSpellSelected@GoInventory@@QBE_NXZ"), inv, 0, 0) & 0xff) return K_MAGIC;
     if (ext_thiscall(c, FX("?IsRangedWeaponSelected@GoInventory@@QBE_NXZ"), inv, 0, 0) & 0xff) return K_RANGED;
@@ -736,6 +739,8 @@ static void frame(Ctx *c)
     static double menu_t; static int menu; if (now - menu_t > 0.1) { menu_t = now; menu = menu_open(c); }
     if (action_hud.menu_open != menu) { action_hud.menu_open = menu; action_hud.seq++; }
     if (dash_until && now > dash_until) dash_end(c);
+    for (int vk = '1'; vk <= '4'; vk++) if (!(w32_keys[vk] & 0x80)) steer_key_seen[vk] = 0;
+    if (!(w32_keys[' '] & 0x80)) steer_key_seen[' '] = 0;
     uint32_t app = rt_r32(G_MEM, 0x79cf74u); int paused = app && G_MEM[app + 0x7c];   /* AppModule::IsUserPaused */
     if (!menu && !paused) {
         steer(c, now);
@@ -768,7 +773,8 @@ int action_override(Ctx *c, uint32_t addr)
         if (!in_game) return 0;
         if ((w32_keys[0x11] | w32_keys[0x12]) & 0x80) return 0;   /* Ctrl/Alt chords stay the game's */
         if (vk == 'P') { rt_w32(G_MEM, ev + 4, 0x13); return 0; }     /* P: the game's Pause key */
-        if (w32_keys[vk] & 0x80) {
+        if (!(w32_keys[vk] & 0x80)) steer_key_seen[vk] = 0;           /* let go: the next press is a new one */
+        else {
             if (!steer_key_seen[vk]) {                                 /* pressed now (not a repeat) */
                 if (vk == ' ') slot_request[0] = 1;
                 if (vk >= '1' && vk <= '4') slot_request[vk - '0'] = 1;

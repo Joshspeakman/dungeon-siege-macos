@@ -13,7 +13,8 @@
 //   LT            health potion (H)
 //   LB            mana potion (M)
 //   D-pad         left/right: previous/next hero (, .)  up: quick weapon select (Q)  down: collect loot (Z)
-//   View          inventory (I)      Menu  options (Esc)      L3  map (Tab)      R3  click at the pointer
+//   View          inventory (I)      Menu  options (Esc)      L3  map (Tab)
+//   R3            right stick: pointer <-> camera (turn left/right, zoom)
 //
 // Which column applies is the game side's call (action_hud.in_game / menu_open). Test mode: the "stick:x,y" and
 // "pad:buttons,frames" script commands stand in for a controller (x, y in percent; buttons as action PAD_* bits).
@@ -58,18 +59,42 @@ static void pad_tick(GCExtendedGamepad *g, double dt)
         if (rclicking) { pad_button(1, 0); rclicking = 0; }
         mode_world = world;
     }
+    // A in the world: a click where the pointer is when the right stick moved it a moment ago, else the game side's
+    // attack / talk / pick up on the nearest thing ahead
+    static double pointer_moved; static int a_click; double tnow = CACurrentMediaTime();
+    static uint32_t aprev; uint32_t apress = raw & ~aprev & PAD_A, arel = aprev & ~raw & PAD_A; aprev = raw;
+    if (world && apress && tnow - pointer_moved < 2.5) { a_click = 1; pad_button(0, 1); }
+    if (a_click && arel) { a_click = 0; pad_button(0, 0); }
     ActionPad e = s; if (!world) { e.lx = e.ly = 0; e.buttons = 0; }   // the game side only acts in the world
+    if (a_click) e.buttons &= ~(uint32_t)PAD_A;
     action_pad = e;
     if (!s.connected) return;
 
-    // the pointer: right stick (either stick outside the world), faster the further it is pushed
-    uint32_t mw, mh; dsr_mode_size(&mw, &mh); double speed = (mh ? mh : 600) * 1.3 * dt;
-    float sx = s.rx, sy = s.ry;
-    if (!world && fabsf(s.lx) + fabsf(s.ly) > fabsf(s.rx) + fabsf(s.ry)) { sx = s.lx; sy = s.ly; }
-    float px = pad_curve(sx), py = pad_curve(sy);
-    if (px || py) rel_motion(px * speed, -py * speed);
-
     static uint32_t prev; uint32_t rp = raw & ~prev, rr = prev & ~raw; prev = raw;
+    // R3 in the world: the right stick works the camera (turn, zoom) instead of the pointer, until R3 again
+    static int camera; static int held_left, held_right; static double zoom_acc;
+    if (world && (rp & PAD_RS)) {
+        camera = !camera;
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        snprintf((char *)action_hud.toast, sizeof action_hud.toast, "%s", camera ? "Right stick: camera (R3 for the pointer)" : "Right stick: pointer (R3 for the camera)");
+        action_hud.toast_until = ts.tv_sec + ts.tv_nsec / 1e9 + 2.0; action_hud.seq++;
+    }
+    int turn_l = 0, turn_r = 0;
+    if (world && camera) {
+        float cx = pad_curve(s.rx), cy = pad_curve(s.ry);
+        turn_l = cx < -0.15f; turn_r = cx > 0.15f;
+        zoom_acc += cy * dt * 6; while (zoom_acc >= 1 || zoom_acc <= -1) { int d = zoom_acc > 0 ? 1 : -1; zoom_acc -= d; post(0x20a, ((uint32_t)(int16_t)(120 * d) << 16), pos_lp()); }
+    } else {
+        // the pointer: right stick (either stick outside the world), faster the further it is pushed
+        uint32_t mw, mh; dsr_mode_size(&mw, &mh); double speed = (mh ? mh : 600) * 1.3 * dt;
+        float sx = s.rx, sy = s.ry;
+        if (!world && fabsf(s.lx) + fabsf(s.ly) > fabsf(s.rx) + fabsf(s.ry)) { sx = s.lx; sy = s.ly; }
+        float px = pad_curve(sx), py = pad_curve(sy);
+        if (px || py) { rel_motion(px * speed, -py * speed); pointer_moved = tnow; }
+    }
+    if (turn_l != held_left) { pad_key(0x25, turn_l); held_left = turn_l; }     // the arrow keys turn the camera while held
+    if (turn_r != held_right) { pad_key(0x27, turn_r); held_right = turn_r; }
+
     if (world) {
         const struct { uint32_t b; int vk; } keys[] = {{PAD_LT, 'H'}, {PAD_LB, 'M'}, {PAD_LEFT, 0xbc}, {PAD_RIGHT, 0xbe}, {PAD_UP, 'Q'},
                                                        {PAD_DOWN, 'Z'}, {PAD_VIEW, 'I'}, {PAD_MENU, 0x1b}, {PAD_LS, 0x09}};
@@ -77,8 +102,6 @@ static void pad_tick(GCExtendedGamepad *g, double dt)
             if (rp & keys[k].b) pad_key(keys[k].vk, 1);
             if (rr & keys[k].b) pad_key(keys[k].vk, 0);
         }
-        if (rp & PAD_RS) { pad_button(0, 1); clicking = 1; }
-        if ((rr & PAD_RS) && clicking) { pad_button(0, 0); clicking = 0; }
     } else {
         if (rp & PAD_A) { pad_button(0, 1); clicking = 1; }
         if ((rr & PAD_A) && clicking) { pad_button(0, 0); clicking = 0; }
