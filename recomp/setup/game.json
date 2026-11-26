@@ -57,6 +57,7 @@
   "out": "work/full",
   "rt_opt": "-O1",
   "frameworks": [
+    "GameController",
     "AppKit",
     "Metal",
     "QuartzCore",
